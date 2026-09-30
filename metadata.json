@@ -1,0 +1,6 @@
+{
+  "name": "LandCraft AI",
+  "description": "From land photo to dream home in minutes — AI that thinks like an architect.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
