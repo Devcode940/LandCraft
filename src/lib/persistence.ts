@@ -37,6 +37,15 @@ function safeStorage(): Storage | null {
 export function savePlanLocally(plan: FloorPlanData): boolean {
   const store = safeStorage();
   if (!store) return false;
+
+  // An empty plan is stored as *absent*, not as an empty document. Otherwise
+  // "clear the canvas, reload" restores the starter plan, because
+  // loadPlanLocally discards empty plans and the caller then falls back.
+  if (isPlanEmpty(plan)) {
+    clearStoredPlan();
+    return true;
+  }
+
   try {
     const payload: StoredPlan = { version: SCHEMA_VERSION, savedAt: new Date().toISOString(), plan };
     store.setItem(STORAGE_KEY, JSON.stringify(payload));

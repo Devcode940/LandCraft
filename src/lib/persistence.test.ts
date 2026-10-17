@@ -60,8 +60,14 @@ describe('local persistence', () => {
     expect(restored!.plan.rooms[0].width).toBeGreaterThanOrEqual(1);
   });
 
-  it('discards an empty stored plan', () => {
+  it('clears storage rather than writing an empty plan', () => {
+    savePlanLocally(sample());
+    expect(loadPlanLocally()).not.toBeNull();
+
     savePlanLocally(emptyPlan());
+    // Not just "returns null on read" -- the record must be gone, otherwise
+    // clear-then-reload silently restores the starter plan.
+    expect(localStorage.getItem('landcraft:plan')).toBeNull();
     expect(loadPlanLocally()).toBeNull();
   });
 });
