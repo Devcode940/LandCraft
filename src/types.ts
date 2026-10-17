@@ -98,30 +98,6 @@ export interface LayerVisibility {
   grid: boolean;
 }
 
-export interface EditorState {
-  plan: FloorPlanData;
-  selectedElementId: string | null;
-  selectedElementType: 'wall' | 'room' | 'opening' | 'furniture' | null;
-  activeTool: ToolType;
-  selectedPaletteItem: {
-    type: 'room' | 'opening' | 'furniture';
-    subType: string;
-    label: string;
-    width?: number;
-    height?: number;
-  } | null;
-  history: FloorPlanData[];
-  historyIndex: number;
-  zoom: number;
-  panX: number;
-  panY: number;
-  unit: DimensionUnit;
-  snapToGrid: boolean;
-  snapToElements: boolean;
-  gridSize: number; // pixels per grid cell (e.g. 20px)
-  highContrast: boolean;
-}
-
 export interface AIReviewItem {
   id: string;
   type: 'info' | 'success' | 'warning' | 'error';

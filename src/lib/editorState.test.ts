@@ -12,7 +12,7 @@ import {
   initEditorState,
   trimHistory,
 } from './editorState';
-import { emptyPlan, makeId, moveRoomWithContents, updateElement, deleteElement } from './planOps';
+import { emptyPlan, makeId, moveRoomWithContents, updateElement, deleteElement, addElement } from './planOps';
 import type { FloorPlanData } from '../types';
 
 const planWith = (n: number): FloorPlanData => ({
@@ -200,6 +200,19 @@ describe('planOps', () => {
   it('moveRoomWithContents ignores an unknown room', () => {
     const p = base();
     expect(moveRoomWithContents(p, 'nope', 10, 10)).toBe(p);
+  });
+
+  it('addElement appends without mutating the previous arrays', () => {
+    const base = planWith(1);
+    const room = { id: 'r-new', x: 0, y: 0, width: 10, height: 10, label: 'New', color: 'rgba(0,0,0,0.1)' };
+    const next = addElement(base, 'room', room);
+
+    expect(next.rooms).toHaveLength(2);
+    expect(base.rooms).toHaveLength(1);
+    expect(next.rooms).not.toBe(base.rooms);
+    // Untouched collections keep their identity -- no needless re-render churn.
+    expect(next.walls).toBe(base.walls);
+    expect(next.furniture).toBe(base.furniture);
   });
 
   it('makeId produces unique ids within the same millisecond', () => {

@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useRef } from 'react';
 import {
   Undo2,
   Redo2,
   Trash2,
   Grid,
   Download,
+  Upload,
   FileCode,
   Eye as HighContrastIcon,
   ZoomIn,
@@ -47,6 +48,7 @@ interface ToolbarProps {
   onLoadSample: (planKey: string) => void;
   onExportJson: () => void;
   onExportSvg: () => void;
+  onImportJson?: (file: File) => void;
   onOpenAR: () => void;
   onOpenEstimator: () => void;
   onOpenAutoLabeler?: () => void;
@@ -121,6 +123,7 @@ export default function Toolbar({
   onLoadSample,
   onExportJson,
   onExportSvg,
+  onImportJson,
   onOpenAR,
   onOpenEstimator,
   onOpenAutoLabeler,
@@ -131,6 +134,7 @@ export default function Toolbar({
   zoom,
   setZoom,
 }: ToolbarProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const toolbarBg = highContrast
     ? 'bg-white border-b-2 border-black text-black'
     : 'bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200';
@@ -335,6 +339,34 @@ export default function Toolbar({
           <Box className="w-4 h-4 text-blue-500" />
           <span className="hidden sm:inline font-bold">View in AR</span>
         </button>
+
+        {onImportJson && (
+          <>
+            <input
+              ref={fileInputRef}
+              id="import-json-input"
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                // Reset first: picking the same file twice would otherwise not
+                // fire a second change event.
+                e.target.value = '';
+                if (file) onImportJson(file);
+              }}
+            />
+            <button
+              id="import-json-btn"
+              onClick={() => fileInputRef.current?.click()}
+              className={accentButtonClass(highContrast, 'emerald')}
+              title="Import a previously exported LandCraft JSON plan"
+            >
+              <Upload className="w-4 h-4 text-emerald-500" />
+              <span className="hidden sm:inline">Import JSON</span>
+            </button>
+          </>
+        )}
 
         <button
           id="export-svg-btn"

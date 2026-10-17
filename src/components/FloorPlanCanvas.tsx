@@ -15,6 +15,7 @@ import {
   ToolType,
   DimensionUnit,
   LayerVisibility,
+  MeasurementTape,
 } from '../types';
 import {
   getSmartSnap,
@@ -25,6 +26,7 @@ import {
 } from '../utils/geoUtils';
 import { suggestRoomName } from '../utils/roomAutoLabeler';
 import { MIN_ZOOM, MAX_ZOOM } from '../constants';
+import { moveRoomWithContents } from '../lib/planOps';
 
 interface FloorPlanCanvasProps {
   plan: FloorPlanData;
@@ -56,7 +58,7 @@ interface FloorPlanCanvasProps {
 type DragElementType = 'room' | 'opening' | 'furniture' | 'joint' | 'room-resize';
 
 interface DragState {
-  mode: 'none' | 'pan' | 'element';
+  mode: 'none' | 'pan' | 'element' | 'measure';
   elementType: DragElementType | null;
   elementId: string | null;
   jointWallId: string | null;
@@ -65,7 +67,12 @@ interface DragState {
   offset: Point;
   startMouse: Point;
   startPan: Point;
+  /** Anchor point for a measurement drag. */
+  measureStart: Point | null;
 }
+
+/** Shortest drag that counts as an intentional measurement, in canvas px. */
+const MIN_MEASURE_PX = 4;
 
 const IDLE_DRAG: DragState = {
   mode: 'none',
@@ -76,6 +83,7 @@ const IDLE_DRAG: DragState = {
   offset: { x: 0, y: 0 },
   startMouse: { x: 0, y: 0 },
   startPan: { x: 0, y: 0 },
+  measureStart: null,
 };
 
 export default function FloorPlanCanvas({
@@ -115,6 +123,14 @@ export default function FloorPlanCanvas({
   const [snappedGuide, setSnappedGuide] = useState<Point | null>(null);
 
   /**
+   * Measurement tapes. These are drafting annotations, not plan geometry, so
+   * they are deliberately NOT part of FloorPlanData: they must not end up in a
+   * JSON export, an AI round trip, or the undo history.
+   */
+  const [measurements, setMeasurements] = useState<MeasurementTape[]>([]);
+  const [measureDraft, setMeasureDraft] = useState<MeasurementTape | null>(null);
+
+  /**
    * Drag bookkeeping lives in a ref because the move/up listeners are attached
    * to `window` (bound once). Previously they were React handlers on the <svg>:
    * releasing the mouse outside the element left `isDraggingElement` stuck true
@@ -138,6 +154,7 @@ export default function FloorPlanCanvas({
     activeTool,
     selectedPaletteItem,
     onStateChange,
+    unit,
   });
 
   useEffect(() => {
@@ -153,6 +170,7 @@ export default function FloorPlanCanvas({
       activeTool,
       selectedPaletteItem,
       onStateChange,
+      unit,
     };
   });
 
@@ -190,6 +208,17 @@ export default function FloorPlanCanvas({
       setCurrentMousePoint(snapped);
       setSnappedGuide(s.snapToGrid || s.snapToElements ? snapped : null);
 
+      if (drag.mode === 'measure' && drag.measureStart) {
+        setMeasureDraft({
+          id: 'draft',
+          x1: drag.measureStart.x,
+          y1: drag.measureStart.y,
+          x2: snapped.x,
+          y2: snapped.y,
+        });
+        return;
+      }
+
       if (drag.mode !== 'element' || !drag.elementId || !drag.elementType) return;
 
       const id = drag.elementId;
@@ -198,10 +227,9 @@ export default function FloorPlanCanvas({
 
         switch (drag.elementType) {
           case 'room':
-            next.rooms = prev.rooms.map((rm) =>
-              rm.id === id ? { ...rm, x: snapped.x - drag.offset.x, y: snapped.y - drag.offset.y } : rm
-            );
-            break;
+            // Carry the furniture and openings inside the room: moving a room
+            // and leaving its contents behind is not what anyone means by it.
+            return moveRoomWithContents(prev, id, snapped.x - drag.offset.x, snapped.y - drag.offset.y);
 
           case 'furniture':
             // Offset-aware now: previously furniture snapped its centre to the
@@ -263,6 +291,16 @@ export default function FloorPlanCanvas({
         // One history entry per drag, recorded on release.
         latest.current.onStateChange();
       }
+      if (drag.mode === 'measure') {
+        setMeasureDraft((draft) => {
+          // Discard accidental clicks: a tape shorter than a few pixels is a
+          // mis-click, not a measurement.
+          if (draft && getDistance({ x: draft.x1, y: draft.y1 }, { x: draft.x2, y: draft.y2 }) >= MIN_MEASURE_PX) {
+            setMeasurements((prev) => [...prev, { ...draft, id: `m-${prev.length}-${Date.now()}` }]);
+          }
+          return null;
+        });
+      }
       dragRef.current = { ...IDLE_DRAG };
     };
 
@@ -282,6 +320,7 @@ export default function FloorPlanCanvas({
         setIsDrawingWall(false);
         setWallStartPoint(null);
         setSelectedPaletteItem(null);
+        setMeasureDraft(null);
         setActiveTool('select');
       }
     };
@@ -325,8 +364,8 @@ export default function FloorPlanCanvas({
   // -------------------------------------------------------------------------
 
   const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
-    // 1. Right / middle click always pans. Measure tool pans on any button.
-    if (e.button === 1 || e.button === 2 || activeTool === 'measure') {
+    // 1. Right / middle click always pans, whatever the active tool is.
+    if (e.button === 1 || e.button === 2) {
       startPan(e);
       e.preventDefault();
       return;
@@ -335,6 +374,16 @@ export default function FloorPlanCanvas({
 
     const coords = getCanvasCoords(e.clientX, e.clientY);
     const snapped = getSmartSnap(coords, plan.walls, gridSize, { snapToGrid, snapToElements });
+
+    // 2. Measure tool: drag out a tape measure. It used to fall through to the
+    //    pan branch, so the tool existed in the palette but did nothing.
+    if (activeTool === 'measure') {
+      const anchor = snapToGrid || snapToElements ? snapped : coords;
+      dragRef.current = { ...IDLE_DRAG, mode: 'measure', measureStart: anchor };
+      setMeasureDraft({ id: 'draft', x1: anchor.x, y1: anchor.y, x2: anchor.x, y2: anchor.y });
+      e.preventDefault();
+      return;
+    }
 
     // 2. Drawing Wall
     if (activeTool === 'wall') {
@@ -553,10 +602,33 @@ export default function FloorPlanCanvas({
         <p className="text-slate-400">
           {activeTool === 'wall' && 'Click to start drawing a wall. Double click or Esc to finish.'}
           {activeTool === 'select' && 'Drag furniture & doors to move. Drag red endpoints to stretch walls.'}
-          {activeTool === 'measure' && 'Hold middle click or drag canvas.'}
+          {activeTool === 'measure' &&
+            'Drag between two points to measure. Middle-drag still pans. Esc clears.'}
           {activeTool === 'delete' && 'Click elements to delete.'}
         </p>
       </div>
+
+      {/* Measurement controls -- only shown once there is something to clear. */}
+      {measurements.length > 0 && (
+        <div className="absolute top-3 right-3 mr-0 z-10 translate-y-14 flex items-center gap-2">
+          <button
+            id="clear-measurements-btn"
+            type="button"
+            onClick={() => setMeasurements([])}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 shadow-lg backdrop-blur-md transition-all cursor-pointer border ${
+              highContrast
+                ? 'bg-white text-black border-2 border-black font-bold'
+                : 'bg-white dark:bg-slate-800 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-400/60'
+            }`}
+            title="Remove all measurement tapes from the canvas"
+          >
+            <Ruler className="w-3.5 h-3.5" />
+            <span className="font-medium">
+              Clear {measurements.length} measurement{measurements.length === 1 ? '' : 's'}
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Real-Time Canvas Wall L x W Quick Toggle HUD */}
       <div className="absolute top-3 right-3 flex items-center gap-2 z-10">
@@ -1183,8 +1255,77 @@ export default function FloorPlanCanvas({
             </g>
           )}
 
+          {/* 7b. Measurement tapes (draft first so committed ones draw on top) */}
+          {[...(measureDraft ? [measureDraft] : []), ...measurements].map((m, i) => {
+            const isDraft = m.id === 'draft';
+            const midX = (m.x1 + m.x2) / 2;
+            const midY = (m.y1 + m.y2) / 2;
+            const length = getDistance({ x: m.x1, y: m.y1 }, { x: m.x2, y: m.y2 });
+            const label = formatDimension(length, unit);
+            const stroke = isDraft ? '#f59e0b' : '#0ea5e9';
+
+            return (
+              <g key={m.id + i} className="pointer-events-none">
+                <line
+                  x1={m.x1}
+                  y1={m.y1}
+                  x2={m.x2}
+                  y2={m.y2}
+                  stroke={stroke}
+                  strokeWidth={2 / zoom}
+                  strokeDasharray={isDraft ? `${6 / zoom} ${4 / zoom}` : undefined}
+                  strokeLinecap="round"
+                />
+                {/* End ticks, drawn perpendicular to the tape. */}
+                {[0, 1].map((end) => {
+                  const px = end === 0 ? m.x1 : m.x2;
+                  const py = end === 0 ? m.y1 : m.y2;
+                  const dx = m.x2 - m.x1;
+                  const dy = m.y2 - m.y1;
+                  const len = Math.hypot(dx, dy) || 1;
+                  const nx = -dy / len;
+                  const ny = dx / len;
+                  const tick = 7 / zoom;
+                  return (
+                    <line
+                      key={end}
+                      x1={px - nx * tick}
+                      y1={py - ny * tick}
+                      x2={px + nx * tick}
+                      y2={py + ny * tick}
+                      stroke={stroke}
+                      strokeWidth={2 / zoom}
+                      strokeLinecap="round"
+                    />
+                  );
+                })}
+                <g transform={`translate(${midX}, ${midY})`}>
+                  <rect
+                    x={-30 / zoom}
+                    y={-11 / zoom}
+                    width={60 / zoom}
+                    height={20 / zoom}
+                    rx={4 / zoom}
+                    fill={isDraft ? '#b45309' : '#0369a1'}
+                    stroke={stroke}
+                    strokeWidth={1.5 / zoom}
+                  />
+                  <text
+                    x={0}
+                    y={4 / zoom}
+                    textAnchor="middle"
+                    fontSize={11 / zoom}
+                    className="fill-white font-mono font-bold"
+                  >
+                    {label}
+                  </text>
+                </g>
+              </g>
+            );
+          })}
+
           {/* 8. SNAPPED TARGET HIGHLIGHT GLOW */}
-          {snappedGuide && (
+          {snappedGuide && activeTool !== 'measure' && (
             <circle
               cx={snappedGuide.x}
               cy={snappedGuide.y}

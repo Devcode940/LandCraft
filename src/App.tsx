@@ -4,10 +4,14 @@
  */
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { Sparkles, PanelLeftOpen, PanelRightOpen, Loader2 } from 'lucide-react';
-import { FloorPlanData, ToolType, DimensionUnit, LayerVisibility, Furniture } from './types';
+import { Sparkles, PanelLeftOpen, PanelRightOpen, Loader2, AlertTriangle, X } from 'lucide-react';
+import { FloorPlanData, ToolType, DimensionUnit, LayerVisibility, Furniture, Opening } from './types';
 import { starterPlans } from './utils/sampleData';
 import { normalizePlan } from './utils/normalizePlan';
+import { editorReducer, initEditorState, type EditorState } from './lib/editorState';
+import { addElement, deleteElement, emptyPlan, findElement, makeId, updateElement } from './lib/planOps';
+import { clearStoredPlan, loadPlanLocally, parsePlanFile, savePlanLocally } from './lib/persistence';
+import { downloadBlob } from './lib/download';
 
 // Components
 import Toolbar from './components/Toolbar';
@@ -25,89 +29,26 @@ import ErrorBoundary from './components/ErrorBoundary';
 // never press. Keep it out of the initial bundle.
 const ARViewer = lazy(() => import('./components/ARViewer'));
 
-// ---------------------------------------------------------------------------
-// Editor state
-//
-// Previously `plan`, `history`, and `historyIndex` were three separate useState
-// values, and history was pushed through `setTimeout(() => handleStateChange(),
-// 50)` fired from *inside* state updater functions. That produced stale
-// closures, duplicate entries, and impure updaters. A single reducer makes
-// every transition atomic and pure.
-// ---------------------------------------------------------------------------
-
-/** Maximum undo steps retained. Bounds memory; drags no longer grow it forever. */
-const HISTORY_LIMIT = 100;
-
-interface EditorState {
-  plan: FloorPlanData;
-  entries: FloorPlanData[];
-  index: number;
+/**
+ * Boot state: restore the last session if there is one, otherwise the starter
+ * plan. This is what makes a refresh non-destructive; the autosave effect below
+ * is the other half.
+ */
+function createInitialEditorState(): EditorState {
+  const restored = loadPlanLocally();
+  return restored
+    ? initEditorState(restored.plan)
+    : initEditorState(normalizePlan(starterPlans.oneBedroom.data));
 }
 
-type EditorAction =
-  | { type: 'set'; plan: FloorPlanData; commit: boolean }
-  | { type: 'update'; updater: (prev: FloorPlanData) => FloorPlanData; commit: boolean }
-  | { type: 'commit' }
-  | { type: 'undo' }
-  | { type: 'redo' };
+/** Debounce for autosave, in milliseconds. */
+const AUTOSAVE_DEBOUNCE_MS = 600;
 
-function trimHistory(entries: FloorPlanData[]): FloorPlanData[] {
-  return entries.length > HISTORY_LIMIT ? entries.slice(entries.length - HISTORY_LIMIT) : entries;
-}
-
-function pushHistory(state: EditorState, plan: FloorPlanData): EditorState {
-  // Coalesce: if nothing actually changed, don't add an undo step.
-  if (state.entries[state.index] === plan) return { ...state, plan };
-  const entries = trimHistory([...state.entries.slice(0, state.index + 1), plan]);
-  return { plan, entries, index: entries.length - 1 };
-}
-
-function editorReducer(state: EditorState, action: EditorAction): EditorState {
-  switch (action.type) {
-    case 'set':
-      return action.commit ? pushHistory(state, action.plan) : { ...state, plan: action.plan };
-
-    case 'update': {
-      const plan = action.updater(state.plan);
-      if (plan === state.plan) return state;
-      return action.commit ? pushHistory(state, plan) : { ...state, plan };
-    }
-
-    case 'commit': {
-      // Snapshot the live plan after a burst of uncommitted updates (e.g. the
-      // end of a drag), without changing it.
-      if (state.entries[state.index] === state.plan) return state;
-      const entries = trimHistory([...state.entries.slice(0, state.index + 1), state.plan]);
-      return { ...state, entries, index: entries.length - 1 };
-    }
-
-    case 'undo': {
-      if (state.index <= 0) return state;
-      const index = state.index - 1;
-      return { ...state, index, plan: state.entries[index] };
-    }
-
-    case 'redo': {
-      if (state.index >= state.entries.length - 1) return state;
-      const index = state.index + 1;
-      return { ...state, index, plan: state.entries[index] };
-    }
-
-    default:
-      return state;
-  }
-}
-
-function initialState(): EditorState {
-  // normalizePlan deep-copies, so editing never mutates the shared module constant.
-  const starter = normalizePlan(starterPlans.oneBedroom.data);
-  return { plan: starter, entries: [starter], index: 0 };
-}
-
-// ---------------------------------------------------------------------------
+/** How long an import failure stays on screen, in milliseconds. */
+const IMPORT_ERROR_TIMEOUT_MS = 6000;
 
 export default function App() {
-  const [state, dispatch] = useReducer(editorReducer, undefined, initialState);
+  const [state, dispatch] = useReducer(editorReducer, undefined, createInitialEditorState);
   const { plan, entries, index } = state;
 
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
@@ -215,11 +156,10 @@ export default function App() {
   const handleRedo = useCallback(() => dispatch({ type: 'redo' }), []);
 
   const handleClear = useCallback(() => {
-    dispatch({
-      type: 'set',
-      plan: { walls: [], rooms: [], openings: [], furniture: [] },
-      commit: true,
-    });
+    dispatch({ type: 'set', plan: emptyPlan(), commit: true });
+    // Drop the autosave too, otherwise refreshing right after a Clear would
+    // quietly bring the starter plan back.
+    clearStoredPlan();
     setSelectedElementId(null);
     setSelectedElementType(null);
   }, []);
@@ -266,24 +206,9 @@ export default function App() {
 
   const handleUpdateElement = useCallback(
     (type: 'wall' | 'room' | 'opening' | 'furniture', id: string, updatedData: any) => {
-      updatePlan((prev) => {
-        const next = { ...prev };
-        switch (type) {
-          case 'wall':
-            next.walls = next.walls.map((w) => (w.id === id ? { ...w, ...updatedData } : w));
-            break;
-          case 'room':
-            next.rooms = next.rooms.map((r) => (r.id === id ? { ...r, ...updatedData } : r));
-            break;
-          case 'opening':
-            next.openings = next.openings.map((o) => (o.id === id ? { ...o, ...updatedData } : o));
-            break;
-          case 'furniture':
-            next.furniture = next.furniture.map((f) => (f.id === id ? { ...f, ...updatedData } : f));
-            break;
-        }
-        return next;
-      });
+      updatePlan((prev) => updateElement(prev, type, id, updatedData));
+      // Inspector fields fire on every keystroke/slider tick; collapse the
+      // burst into one undo step once typing settles.
       scheduleCommit();
     },
     [updatePlan, scheduleCommit]
@@ -291,28 +216,7 @@ export default function App() {
 
   const handleDeleteElement = useCallback(
     (type: 'wall' | 'room' | 'opening' | 'furniture', id: string) => {
-      updatePlanAndCommit((prev) => {
-        const next = { ...prev };
-        switch (type) {
-          case 'wall':
-            next.walls = next.walls.filter((w) => w.id !== id);
-            break;
-          case 'room':
-            next.rooms = next.rooms.filter((r) => r.id !== id);
-            break;
-          case 'opening':
-            next.openings = next.openings.filter((o) => o.id !== id);
-            break;
-          case 'furniture':
-            next.furniture = next.furniture.filter((f) => f.id !== id);
-            break;
-        }
-        // Openings pinned to a removed wall would keep a dangling wallId.
-        if (type === 'wall') {
-          next.openings = next.openings.map((o) => (o.wallId === id ? { ...o, wallId: undefined } : o));
-        }
-        return next;
-      });
+      updatePlanAndCommit((prev) => deleteElement(prev, type, id));
       setSelectedElementId(null);
       setSelectedElementType(null);
     },
@@ -341,56 +245,53 @@ export default function App() {
       const centerY = Math.round((250 - panY) / zoom);
 
       updatePlanAndCommit((prev) => {
-        const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const next = { ...prev };
+        // Generated inside the updater so React's StrictMode double-invoke
+        // cannot create two elements sharing one id.
+        const id = makeId(type);
 
         if (type === 'room') {
           const w = width || 120;
           const h = height || 80;
-          next.rooms = [
-            ...prev.rooms,
-            {
-              id,
-              x: centerX - w / 2,
-              y: centerY - h / 2,
-              width: w,
-              height: h,
-              label,
-              color: extra?.color || 'rgba(59, 130, 246, 0.08)',
-            },
-          ];
-        } else if (type === 'opening') {
-          const isWindow = subType === 'standard' || subType === 'large' || subType === 'bay';
-          next.openings = [
-            ...prev.openings,
-            {
-              id,
-              type: isWindow ? 'window' : 'door',
-              subType: subType as any,
-              x: centerX,
-              y: centerY,
-              width: width || 32,
-              rotation: 0,
-              flipSwing: false,
-            },
-          ];
-        } else if (type === 'furniture') {
-          next.furniture = [
-            ...prev.furniture,
-            {
-              id,
-              subType,
-              label,
-              x: centerX,
-              y: centerY,
-              width: width || 40,
-              height: height || 40,
-              rotation: 0,
-              category: (extra?.category as Furniture['category']) || 'living',
-            },
-          ];
+          return addElement(prev, 'room', {
+            id,
+            x: centerX - w / 2,
+            y: centerY - h / 2,
+            width: w,
+            height: h,
+            label,
+            color: extra?.color || 'rgba(59, 130, 246, 0.08)',
+          });
         }
-        return next;
+
+        if (type === 'opening') {
+          const isWindow = subType === 'standard' || subType === 'large' || subType === 'bay';
+          return addElement(prev, 'opening', {
+            id,
+            type: isWindow ? 'window' : 'door',
+            subType: subType as Opening['subType'],
+            x: centerX,
+            y: centerY,
+            width: width || 32,
+            rotation: 0,
+            flipSwing: false,
+          });
+        }
+
+        if (type === 'furniture') {
+          return addElement(prev, 'furniture', {
+            id,
+            subType,
+            label,
+            x: centerX,
+            y: centerY,
+            width: width || 40,
+            height: height || 40,
+            rotation: 0,
+            category: (extra?.category as Furniture['category']) || 'living',
+          });
+        }
+
+        return prev;
       });
     },
     [updatePlanAndCommit, panX, panY, zoom]
@@ -398,18 +299,7 @@ export default function App() {
 
   const getSelectedElementData = useMemo(() => {
     if (!selectedElementId || !selectedElementType) return null;
-    switch (selectedElementType) {
-      case 'wall':
-        return plan.walls.find((w) => w.id === selectedElementId) || null;
-      case 'room':
-        return plan.rooms.find((r) => r.id === selectedElementId) || null;
-      case 'opening':
-        return plan.openings.find((o) => o.id === selectedElementId) || null;
-      case 'furniture':
-        return plan.furniture.find((f) => f.id === selectedElementId) || null;
-      default:
-        return null;
-    }
+    return findElement(plan, selectedElementType, selectedElementId);
   }, [plan, selectedElementId, selectedElementType]);
 
   // -------------------------------------------------------------------------
@@ -434,16 +324,168 @@ export default function App() {
   }, [plan, unit]);
 
   // -------------------------------------------------------------------------
+  // Keyboard shortcuts
+  //
+  // A drafting tool without Ctrl+Z is not a drafting tool. Bound here at the
+  // document level so they work regardless of which panel has focus, but
+  // suppressed while typing so they never eat characters in a text field.
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      const isTyping =
+        tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable === true;
+
+      const mod = e.ctrlKey || e.metaKey;
+
+      if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
+
+      // Everything below is a bare-key shortcut, so it must not fire while the
+      // user is typing in the inspector or the chat box.
+      if (isTyping || mod || e.altKey) return;
+
+      switch (e.key) {
+        case 'Delete':
+        case 'Backspace':
+          if (selectedElementId && selectedElementType) {
+            e.preventDefault();
+            handleDeleteElement(selectedElementType, selectedElementId);
+          }
+          break;
+        case 'Escape':
+          setSelectedElementId(null);
+          setSelectedElementType(null);
+          break;
+        case 'v':
+        case 'V':
+          setActiveTool('select');
+          break;
+        case 'w':
+        case 'W':
+          setActiveTool('wall');
+          break;
+        case 'r':
+        case 'R':
+          setActiveTool('room');
+          break;
+        case 'd':
+        case 'D':
+          setActiveTool('door');
+          break;
+        case 'n':
+        case 'N':
+          setActiveTool('window');
+          break;
+        case 'f':
+        case 'F':
+          setActiveTool('furniture');
+          break;
+        case 'm':
+        case 'M':
+          setActiveTool('measure');
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    handleRedo,
+    handleUndo,
+    handleDeleteElement,
+    selectedElementId,
+    selectedElementType,
+    setActiveTool,
+    setSelectedElementId,
+    setSelectedElementType,
+  ]);
+
+  // -------------------------------------------------------------------------
+  // Persistence
+  // -------------------------------------------------------------------------
+
+  /**
+   * Autosave. Debounced because `plan` gets a new identity on every mousemove
+   * during a drag, and writing to localStorage is synchronous -- doing it per
+   * frame visibly janks the canvas. Flushed on unmount and on `beforeunload`
+   * so a drag in progress is not lost.
+   */
+  const saveTimer = useRef<number | null>(null);
+
+  // Mirrored into a ref so the beforeunload handler (registered once) always
+  // sees the newest plan. Updated in an effect because writing a ref during
+  // render is not safe under concurrent rendering.
+  const planRef = useRef(plan);
+  useEffect(() => {
+    planRef.current = plan;
+  }, [plan]);
+
+  useEffect(() => {
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = null;
+      savePlanLocally(plan);
+    }, AUTOSAVE_DEBOUNCE_MS);
+
+    return () => {
+      if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    };
+  }, [plan]);
+
+  useEffect(() => {
+    const flush = () => savePlanLocally(planRef.current);
+    window.addEventListener('beforeunload', flush);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      flush();
+    };
+  }, []);
+
+  const [importError, setImportError] = useState<string | null>(null);
+
+  // Auto-dismiss import errors: they are transient feedback, not a state the
+  // user has to click away before continuing.
+  useEffect(() => {
+    if (!importError) return;
+    const timer = window.setTimeout(() => setImportError(null), IMPORT_ERROR_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [importError]);
+
+  const handleImportJson = useCallback(
+    async (file: File) => {
+      setImportError(null);
+      try {
+        const parsed = parsePlanFile(await file.text());
+        dispatch({ type: 'set', plan: parsed, commit: true });
+        setSelectedElementId(null);
+        setSelectedElementType(null);
+      } catch (error) {
+        // parsePlanFile throws user-facing messages; never leak a stack trace
+        // into the UI for what is almost always a wrong-file mistake.
+        setImportError(error instanceof Error ? error.message : 'That file could not be read.');
+      }
+    },
+    []
+  );
+
+  // -------------------------------------------------------------------------
   // Exports
   // -------------------------------------------------------------------------
   const handleExportJson = useCallback(() => {
-    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(plan, null, 2));
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute('href', dataStr);
-    downloadAnchor.setAttribute('download', `landcraft-plan-${Date.now()}.json`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
+    downloadBlob(`landcraft-plan-${Date.now()}.json`, JSON.stringify(plan, null, 2), 'application/json');
   }, [plan]);
 
   const handleExportSvg = useCallback(() => {
@@ -462,14 +504,11 @@ export default function App() {
     clone.setAttribute('height', String(Math.max(1, Math.round(rect.height))));
     clone.setAttribute('viewBox', `0 0 ${Math.max(1, Math.round(rect.width))} ${Math.max(1, Math.round(rect.height))}`);
 
-    const svgString = serializer.serializeToString(clone);
-    const dataStr = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgString);
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute('href', dataStr);
-    downloadAnchor.setAttribute('download', `landcraft-blueprint-${Date.now()}.svg`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
+    downloadBlob(
+      `landcraft-blueprint-${Date.now()}.svg`,
+      serializer.serializeToString(clone),
+      'image/svg+xml'
+    );
   }, []);
 
   // -------------------------------------------------------------------------
@@ -583,6 +622,7 @@ export default function App() {
             onLoadSample={handleLoadSample}
             onExportJson={handleExportJson}
             onExportSvg={handleExportSvg}
+            onImportJson={handleImportJson}
             onOpenAR={() => setIsARViewerOpen(true)}
             onOpenEstimator={() => setIsEstimatorOpen(true)}
             onOpenAutoLabeler={() => setIsAutoLabelModalOpen(true)}
@@ -701,6 +741,28 @@ export default function App() {
             <ARViewer plan={plan} onClose={() => setIsARViewerOpen(false)} />
           </Suspense>
         </ErrorBoundary>
+      )}
+
+      {/* Import failure feedback */}
+      {importError && (
+        <div
+          role="alert"
+          className={`fixed top-20 left-1/2 -translate-x-1/2 z-[110] max-w-md flex items-start gap-3 px-4 py-3 rounded-xl shadow-2xl border text-sm ${
+            highContrast
+              ? 'bg-white border-2 border-black text-black font-semibold'
+              : 'bg-red-950/95 border-red-700 text-red-100'
+          }`}
+        >
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span className="flex-1">{importError}</span>
+          <button
+            onClick={() => setImportError(null)}
+            className="shrink-0 opacity-70 hover:opacity-100 transition-opacity"
+            aria-label="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       )}
 
       {/* Cost Estimator Overlay */}

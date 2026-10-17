@@ -13,18 +13,8 @@ export default defineConfig(() => {
     },
     build: {
       // Surface bundle-size regressions instead of letting them creep in.
-      chunkSizeWarningLimit: 1200,
-      rollupOptions: {
-        output: {
-          manualChunks(id: string) {
-            // three/R3F/drei/xr belong to the lazily-loaded AR viewer only.
-            if (id.includes('node_modules/three') || id.includes('@react-three') || id.includes('@pmndrs')) {
-              return 'three';
-            }
-            return undefined;
-          },
-        },
-      },
+      // 700 kB is roughly the gzip floor we can defend for the editor shell.
+      chunkSizeWarningLimit: 700,
     },
     server: {
       // Allow proxied/preview hostnames (Cloud Run service URLs, sandbox previews).

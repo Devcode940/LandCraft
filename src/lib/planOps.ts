@@ -86,6 +86,37 @@ interface FloorPlanDataMap {
   furniture: Furniture;
 }
 
+/**
+ * Append one element.
+ *
+ * Returns a new plan with a new array -- the previous implementation did
+ * `const next = {...prev}; next.rooms.push(room)`, which mutated the array
+ * shared by every snapshot in the undo history, so undo could never remove a
+ * placed element.
+ */
+export function addElement(plan: FloorPlanData, type: 'wall', data: Wall): FloorPlanData;
+export function addElement(plan: FloorPlanData, type: 'room', data: Room): FloorPlanData;
+export function addElement(plan: FloorPlanData, type: 'opening', data: Opening): FloorPlanData;
+export function addElement(plan: FloorPlanData, type: 'furniture', data: Furniture): FloorPlanData;
+export function addElement(
+  plan: FloorPlanData,
+  type: ElementType,
+  data: Wall | Room | Opening | Furniture
+): FloorPlanData {
+  switch (type) {
+    case 'wall':
+      return { ...plan, walls: [...plan.walls, data as Wall] };
+    case 'room':
+      return { ...plan, rooms: [...plan.rooms, data as Room] };
+    case 'opening':
+      return { ...plan, openings: [...plan.openings, data as Opening] };
+    case 'furniture':
+      return { ...plan, furniture: [...plan.furniture, data as Furniture] };
+    default:
+      return plan;
+  }
+}
+
 /** Remove one element by id, clearing any dangling references to it. */
 export function deleteElement(plan: FloorPlanData, type: ElementType, id: string): FloorPlanData {
   switch (type) {
