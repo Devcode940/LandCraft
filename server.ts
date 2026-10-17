@@ -3,19 +3,86 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import express from "express";
-import path from "path";
-import { createServer as createViteServer } from "vite";
-import dotenv from "dotenv";
-import { GoogleGenAI, Type } from "@google/genai";
+import express from 'express';
+import path from 'path';
+import { createServer as createViteServer } from 'vite';
+import dotenv from 'dotenv';
+import rateLimit from 'express-rate-limit';
+import { GoogleGenAI, Type } from '@google/genai';
+import { normalizePlan } from './src/utils/normalizePlan';
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+/**
+ * Model IDs are pinned in ONE place.
+ *
+ * History: this file previously hardcoded `gemini-1.5-pro` / `gemini-1.5-flash`,
+ * which Google shut down on 2025-09-29 -- four of six AI features were dead.
+ * It also used `gemini-3.5-flash`, deprecated 2026-10-08 (requests are silently
+ * auto-routed to 3.6). Do not hardcode model strings at call sites; extend this
+ * map and let `MODEL` env vars override for experimentation.
+ */
+export const MODELS = {
+  /** Text-to-floor-plan generation. High volume, latency sensitive. */
+  generation: process.env.MODEL_GENERATION || 'gemini-3.8-flash',
+  /** Image-to-floor-plan (land photo). Needs multimodal input. */
+  vision: process.env.MODEL_VISION || 'gemini-3.8-flash',
+  /** Blueprint audit. Wants deeper reasoning. */
+  audit: process.env.MODEL_AUDIT || 'gemini-3.1-pro-preview',
+  /** Conversational architect assistant with tool calling. */
+  chat: process.env.MODEL_CHAT || 'gemini-3.1-pro-preview',
+  /** Cost optimization suggestions. Small output, cheap is fine. */
+  cost: process.env.MODEL_COST || 'gemini-3.5-flash-lite',
+} as const;
+
+/** Hard ceiling on a single upstream model call. */
+const REQUEST_TIMEOUT_MS = 120_000;
+
+/** Max accepted image payload (bytes, decoded). ~10 MB. */
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+const ALLOWED_IMAGE_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+]);
+
+// ---------------------------------------------------------------------------
+// Middleware
+// ---------------------------------------------------------------------------
+
+// 10 MB is generous for a base64 image plus a prompt; the previous 50 MB let a
+// single request balloon the process heap.
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+/**
+ * Rate limit every mutating /api route. Each HTTP request fans out to up to 3
+ * upstream model calls, so an unthrottled endpoint burns quota 3x per hit (and
+ * 9x when the client asks for 3 variants of a photo).
+ */
+const apiLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: Number(process.env.RATE_LIMIT_PER_MIN) || 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Too Many Requests',
+    message: 'Rate limit exceeded. Please wait a moment before generating again.',
+  },
+});
+
+app.use('/api/', apiLimiter);
 
 // Initialize the server-side Gemini client with proper User-Agent header for tracking
 const ai = new GoogleGenAI({
@@ -23,11 +90,86 @@ const ai = new GoogleGenAI({
   httpOptions: {
     headers: {
       'User-Agent': 'aistudio-build',
-    }
-  }
+    },
+    timeout: REQUEST_TIMEOUT_MS,
+  },
 });
 
+// ---------------------------------------------------------------------------
+// Input coercion helpers
+//
+// Every one of these previously crashed with an unhandled TypeError on
+// malformed input (e.g. "Cannot read properties of undefined (reading 'total')").
+// ---------------------------------------------------------------------------
+
+function clampNum(v: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function clampInt(v: unknown, fallback: number, min: number, max: number): number {
+  return Math.round(clampNum(v, fallback, min, max));
+}
+
+/** Trim and cap a free-text field. Also strips NULs which upset some APIs. */
+function cleanText(v: unknown, maxLen: number): string {
+  if (typeof v !== 'string') return '';
+  return v.replace(/\0/g, '').trim().slice(0, maxLen);
+}
+
+/** Accept a string or an array of {role, text} parts. */
+function normalizeMessages(v: unknown): { role: 'user' | 'model'; text: string }[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .slice(0, 50)
+    .map((m) => {
+      if (typeof m === 'string') return { role: 'user' as const, text: cleanText(m, 8000) };
+      if (typeof m === 'object' && m !== null) {
+        const rec = m as Record<string, unknown>;
+        const rawRole = typeof rec.role === 'string' ? rec.role.toLowerCase() : '';
+        const role = rawRole === 'model' || rawRole === 'assistant' ? 'model' : 'user';
+        const content = typeof rec.content === 'string' ? rec.content : typeof rec.text === 'string' ? rec.text : '';
+        return { role: role as 'user' | 'model', text: cleanText(content, 8000) };
+      }
+      return null;
+    })
+    .filter((m): m is { role: 'user' | 'model'; text: string } => m !== null && m.text.length > 0);
+}
+
+/** Validate + decode a data-URL or raw base64 image. Throws with a clear message. */
+function parseImage(input: unknown, declaredMime: unknown): { data: string; mimeType: string } {
+  if (typeof input !== 'string' || input.length === 0) {
+    throw new ValidationError('No image data provided.');
+  }
+
+  const match = /^data:([a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+);base64,(.*)$/s.exec(input);
+  const data = match ? match[2] : input;
+  const mimeType = match ? match[1] : typeof declaredMime === 'string' ? declaredMime : 'image/jpeg';
+
+  if (!ALLOWED_IMAGE_MIME.has(mimeType.toLowerCase())) {
+    throw new ValidationError(`Unsupported image type "${mimeType}". Use JPEG, PNG, or WebP.`);
+  }
+  if (!/^[A-Za-z0-9+/=\s]+$/.test(data)) {
+    throw new ValidationError('Image data is not valid base64.');
+  }
+
+  // 4 base64 chars encode 3 bytes; padding adds at most 3.
+  const decodedBytes = Math.floor((data.length * 3) / 4) - 2;
+  if (decodedBytes > MAX_IMAGE_BYTES) {
+    const mb = (decodedBytes / (1024 * 1024)).toFixed(1);
+    throw new ValidationError(`Image is too large (${mb} MB). Please upload an image under 10 MB.`);
+  }
+
+  return { data, mimeType };
+}
+
+class ValidationError extends Error {}
+
+// ---------------------------------------------------------------------------
 // The system prompt for architectural design generation
+// ---------------------------------------------------------------------------
+
 const SYSTEM_INSTRUCTION = `
 You are a licensed principal architect at LandCraft AI, specializing in converting user criteria into high-quality, code-compliant, and visually beautiful 2D floor plans.
 Your output must be a fully coordinated architectural floor plan represented strictly in a structured JSON layout that is physically buildable.
@@ -219,283 +361,194 @@ const AUDIT_RESPONSE_SCHEMA = {
   required: ["issues", "optimizedPlan"]
 };
 
-// POST route to handle prompt engineering and generate floor plan variants
-app.post("/api/generate-floor-plan", async (req, res) => {
-  try {
-    const { 
-      prompt, 
-      plotWidth = 15, 
-      plotLength = 20, 
-      bedrooms = 3, 
-      bathrooms = 2, 
-      floors = 1, 
-      style = "Modern",
-      variantsCount = 2 
-    } = req.body;
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
 
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === "MY_GEMINI_API_KEY") {
-      return res.status(400).json({ 
-        error: "Missing API Key", 
-        message: "Gemini API key is not configured. Please add your GEMINI_API_KEY in the Settings > Secrets panel." 
-      });
+/** Returns an error response when the key is absent, or null when configured. */
+function missingKey(): { status: number; body: Record<string, unknown> } | null {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key || key === 'MY_GEMINI_API_KEY') {
+    return {
+      status: 400,
+      body: {
+        error: 'Missing API Key',
+        message: 'Gemini API key is not configured. Please add your GEMINI_API_KEY in the Settings > Secrets panel.',
+      },
+    };
+  }
+  return null;
+}
+
+/** Shared shape of the numeric design brief sent by every generation form. */
+function readBrief(body: Record<string, unknown>) {
+  return {
+    plotWidth: clampNum(body.plotWidth, 15, 2, 200),
+    plotLength: clampNum(body.plotLength, 20, 2, 200),
+    bedrooms: clampInt(body.bedrooms, 3, 0, 20),
+    bathrooms: clampNum(body.bathrooms, 2, 0, 20),
+    floors: clampInt(body.floors, 1, 1, 10),
+    style: cleanText(body.style, 40) || 'Modern',
+    prompt: cleanText(body.prompt, 4000),
+    variantsCount: clampInt(body.variantsCount, 2, 1, 3),
+  };
+}
+
+const VARIATION_DIRECTIONS = [
+  'Option A: Highly functional layout maximizing living spaces and passive light flow.',
+  'Option B: Creative layout featuring open-plan social zones and segmented private bedroom wings.',
+  'Option C: Space-saving ultra-compact layout prioritizing extra storage or garden flow.',
+];
+
+const PHOTO_VARIATION_DIRECTIONS = [
+  'Option A: Direct layout optimizing for the most prominent site features and sunlight.',
+  'Option B: Alternative layout offering a different living zone orientation based on site constraints.',
+  'Option C: Unique architectural approach integrating tightly with the site\'s natural boundaries.',
+];
+
+/**
+ * Turn N parallel model calls into variant objects.
+ *
+ * `Promise.all` previously meant one flaky call rejected the whole batch and
+ * the user lost every variant. `allSettled` keeps the successes.
+ */
+async function resolveVariants(
+  calls: Promise<{ text?: string }>[],
+  directions: string[],
+  idPrefix: string,
+  brief: ReturnType<typeof readBrief>
+) {
+  const results = await Promise.allSettled(calls);
+
+  return results.map((res, idx) => {
+    const fallback = {
+      id: `${idPrefix}-${idx}-${Date.now()}`,
+      title: `Variant ${idx + 1} (Generation Failure)`,
+      error: 'Generation Failed',
+      message:
+        res.status === 'rejected'
+          ? 'This variant could not be generated. The other options are still available.'
+          : 'The model returned an invalid format. Please try again with a refined prompt.',
+      plan: { walls: [], rooms: [], openings: [], furniture: [] },
+      rationale: {
+        architecturalConcept: 'Generation failed.',
+        zoningRationale: 'N/A',
+        circulationFlow: 'N/A',
+        naturalLightAndVents: 'N/A',
+      },
+      dimensions: {
+        widthMeters: brief.plotWidth,
+        lengthMeters: brief.plotLength,
+        totalBuildAreaM2: 0,
+        scalePixelsPerMeter: 40,
+      },
+      _direction: directions[idx] ?? directions[directions.length - 1],
+    };
+
+    if (res.status === 'rejected') {
+      console.error(`Variant ${idx} rejected:`, res.reason);
+      return fallback;
     }
 
-    // Structure a highly targeted prompt using form parameters & natural language instructions
+    try {
+      const parsed = JSON.parse((res.value.text || '{}').trim());
+      return {
+        id: `${idPrefix}-${idx}-${Date.now()}`,
+        title: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name : `Variant ${idx + 1}`,
+        ...parsed,
+        // normalizePlan guarantees all four arrays exist and every field is a
+        // finite number -- the canvas renders these directly.
+        plan: normalizePlan(parsed.plan),
+      };
+    } catch (err) {
+      console.error(`Failed to parse variant ${idx} output:`, err);
+      return fallback;
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+/** Lightweight readiness probe: is a key set, and which models are targeted? */
+app.get('/api/health', (_req, res) => {
+  res.json({
+    success: true,
+    apiKeyConfigured: missingKey() === null,
+    models: MODELS,
+  });
+});
+
+// POST route to handle prompt engineering and generate floor plan variants
+app.post('/api/generate-floor-plan', async (req, res) => {
+  let brief: ReturnType<typeof readBrief>;
+  try {
+    const noKey = missingKey();
+    if (noKey) return res.status(noKey.status).json(noKey.body);
+
+    brief = readBrief((req.body ?? {}) as Record<string, unknown>);
+
     const userPromptText = `
 Generate a beautiful architectural floor plan based on the following specifications:
-- Plot Dimensions: ${plotWidth}m width x ${plotLength}m length (at 40px/meter scale, this is ${plotWidth * 40}px width by ${plotLength * 40}px height).
-- Intended Bedrooms: ${bedrooms}
-- Intended Bathrooms: ${bathrooms}
-- Number of floors: ${floors}
-- Architectural Style: ${style}
-- User Natural Language Request: "${prompt || 'Generate a highly optimized layout fitting the space.'}"
+- Plot Dimensions: ${brief.plotWidth}m width x ${brief.plotLength}m length (at 40px/meter scale, this is ${brief.plotWidth * 40}px width by ${brief.plotLength * 40}px height).
+- Intended Bedrooms: ${brief.bedrooms}
+- Intended Bathrooms: ${brief.bathrooms}
+- Number of floors: ${brief.floors}
+- Architectural Style: ${brief.style}
+- User Natural Language Request: "${brief.prompt || 'Generate a highly optimized layout fitting the space.'}"
 
 Create a highly detailed, aligned, and buildable plan with walls, labeled rooms, doors/windows, and appropriate furniture matching the style.
 Ensure that all coordinates form closed boundaries and there are NO isolated or overlapping walls/rooms.
 All coordinates MUST be integers and align to a 10px or 20px grid spacing where possible to make editing easy.
 `;
 
-    const variantPrompts = [];
-    const count = Math.min(Math.max(Number(variantsCount), 1), 3); // clamp to 1-3 variants
+    const calls = Array.from({ length: brief.variantsCount }, (_, i) =>
+      ai.models.generateContent({
+        model: MODELS.generation,
+        contents: `${userPromptText}\n\nVariation Requirement for this variant: ${VARIATION_DIRECTIONS[i]}`,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          responseMimeType: 'application/json',
+          responseSchema: FLOOR_PLAN_RESPONSE_SCHEMA,
+          temperature: 0.7 + i * 0.1, // slightly vary the temperatures for diverse variants
+        },
+      })
+    );
 
-    for (let i = 0; i < count; i++) {
-      let variationDirection = "Option A: Highly functional layout maximizing living spaces and passive light flow.";
-      if (i === 1) {
-        variationDirection = "Option B: Creative layout featuring open-plan social zones and segmented private bedroom wings.";
-      } else if (i === 2) {
-        variationDirection = "Option C: Space-saving ultra-compact layout prioritizing extra storage or garden flow.";
-      }
-
-      variantPrompts.push(
-        ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: `${userPromptText}\n\nVariation Requirement for this variant: ${variationDirection}`,
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
-            responseMimeType: "application/json",
-            responseSchema: FLOOR_PLAN_RESPONSE_SCHEMA,
-            temperature: 0.7 + (i * 0.1) // slightly vary the temperatures for diverse variants
-          }
-        })
-      );
-    }
-
-    // Resolve variants in parallel for maximum performance
-    const results = await Promise.all(variantPrompts);
-    const variants = results.map((resObj, idx) => {
-      try {
-        const textStr = resObj.text || "{}";
-        const parsedData = JSON.parse(textStr.trim());
-        return {
-          id: `variant-${idx}-${Date.now()}`,
-          title: parsedData.name || `Variant ${idx + 1}`,
-          ...parsedData
-        };
-      } catch (err: any) {
-        console.error(`Failed to parse variant ${idx} output:`, err);
-        return {
-          id: `variant-${idx}-${Date.now()}`,
-          title: `Variant ${idx + 1} (Generation Failure)`,
-          error: "JSON Parsing Error",
-          message: "The model generated an invalid format. Please try again with a refined prompt.",
-          plan: { walls: [], rooms: [], openings: [], furniture: [] },
-          rationale: {
-            architecturalConcept: "Generation failed due to formatting issues.",
-            zoningRationale: "Failed to coordinate rooms.",
-            circulationFlow: "Failed to coordinate hallways.",
-            naturalLightAndVents: "No window placements."
-          },
-          dimensions: {
-            widthMeters: plotWidth,
-            lengthMeters: plotLength,
-            totalBuildAreaM2: 0,
-            scalePixelsPerMeter: 40
-          }
-        };
-      }
-    });
-
+    const variants = await resolveVariants(calls, VARIATION_DIRECTIONS, 'variant', brief);
     res.json({ success: true, variants });
-  } catch (error: any) {
-    console.error("Floor plan generation error:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: "AI Generation Error", 
-      message: error?.message || "An unexpected error occurred during design generation. Please verify your prompt and try again." 
+  } catch (error) {
+    console.error('Floor plan generation error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'AI Generation Error',
+      message: 'An unexpected error occurred during design generation. Please verify your prompt and try again.',
     });
   }
 });
 
 // POST route to analyze land photo and generate layout
-app.post("/api/analyze-land-photo", async (req, res) => {
+app.post('/api/design-from-photo', async (req, res) => {
   try {
-    const { 
-      imageBase64,
-      mimeType,
-      prompt, 
-      plotWidth = 15, 
-      plotLength = 20, 
-      bedrooms = 3, 
-      bathrooms = 2, 
-      floors = 1, 
-      style = "Modern",
-      variantsCount = 2 
-    } = req.body;
+    const noKey = missingKey();
+    if (noKey) return res.status(noKey.status).json(noKey.body);
 
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === "MY_GEMINI_API_KEY") {
-      return res.status(400).json({ 
-        error: "Missing API Key", 
-        message: "Gemini API key is not configured. Please add your GEMINI_API_KEY in the Settings > Secrets panel." 
-      });
-    }
-    
-    if (!imageBase64) {
-      return res.status(400).json({
-        error: "Missing Image",
-        message: "No image data provided for analysis."
-      });
-    }
-
-    // Determine the base64 string safely whether it has data URL prefix or not
-    const base64Data = imageBase64.includes('base64,') 
-      ? imageBase64.split('base64,')[1] 
-      : imageBase64;
-
-    const userPromptText = `
-Analyze the provided land/plot photo and generate an optimal architectural floor plan.
-Consider terrain hints, boundaries, vegetation, and likely sun direction if inferable.
-- Plot Dimensions: ${plotWidth}m width x ${plotLength}m length (at 40px/meter scale, this is ${plotWidth * 40}px width by ${plotLength * 40}px height).
-- Intended Bedrooms: ${bedrooms}
-- Intended Bathrooms: ${bathrooms}
-- Number of floors: ${floors}
-- Architectural Style: ${style}
-- User Specific Requests: "${prompt || 'Optimize layout for the specific plot terrain and boundaries.'}"
-
-Ensure the generated layout is strictly coordinated inside the boundaries and addresses any contextual constraints visible in the image.
-`;
-
-    const variantPrompts = [];
-    const count = Math.min(Math.max(Number(variantsCount), 1), 3); // clamp to 1-3 variants
-
-    for (let i = 0; i < count; i++) {
-      let variationDirection = "Option A: Direct layout optimizing for the most prominent site features and sunlight.";
-      if (i === 1) {
-        variationDirection = "Option B: Alternative layout offering a different living zone orientation based on site constraints.";
-      } else if (i === 2) {
-        variationDirection = "Option C: Unique architectural approach integrating tightly with the site's natural boundaries.";
-      }
-
-      variantPrompts.push(
-        ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  inlineData: {
-                    data: base64Data,
-                    mimeType: mimeType || "image/jpeg"
-                  }
-                },
-                { text: `${userPromptText}\n\nVariation Requirement for this variant: ${variationDirection}` }
-              ]
-            }
-          ],
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
-            responseMimeType: "application/json",
-            responseSchema: FLOOR_PLAN_RESPONSE_SCHEMA,
-            temperature: 0.7 + (i * 0.1) // slightly vary the temperatures
-          }
-        })
-      );
-    }
-
-    const results = await Promise.all(variantPrompts);
-    const variants = results.map((resObj, idx) => {
-      try {
-        const textStr = resObj.text || "{}";
-        const parsedData = JSON.parse(textStr.trim());
-        return {
-          id: `variant-photo-${idx}-${Date.now()}`,
-          title: parsedData.name || `Variant ${idx + 1}`,
-          ...parsedData
-        };
-      } catch (err: any) {
-        console.error(`Failed to parse photo variant ${idx} output:`, err);
-        return {
-          id: `variant-photo-${idx}-${Date.now()}`,
-          title: `Variant ${idx + 1} (Generation Failure)`,
-          error: "JSON Parsing Error",
-          message: "The model generated an invalid format.",
-          plan: { walls: [], rooms: [], openings: [], furniture: [] },
-          rationale: {
-            architecturalConcept: "Generation failed.",
-            zoningRationale: "N/A",
-            circulationFlow: "N/A",
-            naturalLightAndVents: "N/A"
-          },
-          dimensions: {
-            widthMeters: plotWidth,
-            lengthMeters: plotLength,
-            totalBuildAreaM2: 0,
-            scalePixelsPerMeter: 40
-          }
-        };
-      }
-    });
-
-    res.json({ success: true, variants });
-  } catch (error: any) {
-    console.error("Photo analysis generation error:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: "AI Generation Error", 
-      message: error?.message || "An unexpected error occurred during photo analysis." 
-    });
-  }
-});
-
-// POST route to handle multimodal generation from a land photo
-app.post("/api/design-from-photo", async (req, res) => {
-  try {
-    const {
-      imageBase64,
-      prompt,
-      plotWidth = 20,
-      plotLength = 30,
-      bedrooms = 3,
-      bathrooms = 2,
-      floors = 1,
-      style = "Modern",
-      variantsCount = 2
-    } = req.body;
-
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === "MY_GEMINI_API_KEY") {
-      return res.status(400).json({ 
-        error: "Missing API Key", 
-        message: "Gemini API key is not configured." 
-      });
-    }
-
-    if (!imageBase64) {
-      return res.status(400).json({ error: "Missing Image", message: "No image provided." });
-    }
-
-    // Extract base64 part
-    const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-    const mimeType = imageBase64.match(/^data:(image\/\w+);base64,/)?.[1] || "image/jpeg";
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    // Defaults match the photo tab's form (previously 20x30 here vs 15x20 in
+    // the generator, with no reason for the difference).
+    const brief = readBrief({ plotWidth: 15, plotLength: 20, ...body });
+    const { data, mimeType } = parseImage(body.imageBase64, body.mimeType);
 
     const userPromptText = `
 Analyze this land plot photo. Identify boundaries, potential natural light paths, terrain features, and optimal areas for construction.
 Based on your analysis of this specific site, generate a beautiful architectural floor plan matching these specifications:
-- Plot Dimensions: ${plotWidth}m width x ${plotLength}m length (at 40px/meter scale, this is ${plotWidth * 40}px width by ${plotLength * 40}px height).
-- Intended Bedrooms: ${bedrooms}
-- Intended Bathrooms: ${bathrooms}
-- Number of floors: ${floors}
-- Architectural Style: ${style}
-- User Notes: "${prompt || 'Optimize layout for the visible terrain and views.'}"
+- Plot Dimensions: ${brief.plotWidth}m width x ${brief.plotLength}m length (at 40px/meter scale, this is ${brief.plotWidth * 40}px width by ${brief.plotLength * 40}px height).
+- Intended Bedrooms: ${brief.bedrooms}
+- Intended Bathrooms: ${brief.bathrooms}
+- Number of floors: ${brief.floors}
+- Architectural Style: ${brief.style}
+- User Notes: "${brief.prompt || 'Optimize layout for the visible terrain and views.'}"
 
 In your rationale, explicitly mention how you optimized the design based on the visual features in the provided photo (e.g., placing windows towards a nice view, or aligning the driveway to the street).
 Create a highly detailed, aligned, and buildable plan with walls, labeled rooms, doors/windows, and appropriate furniture matching the style.
@@ -503,97 +556,55 @@ Ensure that all coordinates form closed boundaries and there are NO isolated or 
 All coordinates MUST be integers and align to a 10px or 20px grid spacing.
 `;
 
-    const variantPrompts = [];
-    const count = Math.min(Math.max(Number(variantsCount), 1), 3);
-
-    for (let i = 0; i < count; i++) {
-      let variationDirection = "Option A: Primary optimal layout balancing site features and functional space.";
-      if (i === 1) {
-        variationDirection = "Option B: Alternative layout emphasizing views and outdoor integration with the landscape shown in the photo.";
-      } else if (i === 2) {
-        variationDirection = "Option C: Space-maximizing layout oriented for privacy from neighbors or roads visible in the photo.";
-      }
-
-      variantPrompts.push(
-        ai.models.generateContent({
-          model: "gemini-1.5-pro",
-          contents: [
-            {
-              inlineData: {
-                data: base64Data,
-                mimeType: mimeType
-              }
-            },
-            `${userPromptText}\n\nVariation Requirement for this variant: ${variationDirection}`
-          ],
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
-            responseMimeType: "application/json",
-            responseSchema: FLOOR_PLAN_RESPONSE_SCHEMA,
-            temperature: 0.7 + (i * 0.1)
-          }
-        })
-      );
-    }
-
-    const results = await Promise.all(variantPrompts);
-    const variants = results.map((resObj, idx) => {
-      try {
-        const textStr = resObj.text || "{}";
-        const parsedData = JSON.parse(textStr.trim());
-        return {
-          id: `variant-photo-${idx}-${Date.now()}`,
-          title: parsedData.name || `Site Variant ${idx + 1}`,
-          ...parsedData
-        };
-      } catch (err: any) {
-        console.error(`Failed to parse photo variant ${idx} output:`, err);
-        return {
-          id: `variant-photo-${idx}-${Date.now()}`,
-          title: `Variant ${idx + 1} (Generation Failure)`,
-          error: "JSON Parsing Error",
-          message: "The model generated an invalid format.",
-          plan: { walls: [], rooms: [], openings: [], furniture: [] },
-          rationale: {
-            architecturalConcept: "Generation failed.",
-            zoningRationale: "N/A",
-            circulationFlow: "N/A",
-            naturalLightAndVents: "N/A"
+    const calls = Array.from({ length: brief.variantsCount }, (_, i) =>
+      ai.models.generateContent({
+        model: MODELS.vision,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { inlineData: { data, mimeType } },
+              {
+                text: `${userPromptText}\n\nVariation Requirement for this variant: ${PHOTO_VARIATION_DIRECTIONS[i]}`,
+              },
+            ],
           },
-          dimensions: {
-            widthMeters: plotWidth,
-            lengthMeters: plotLength,
-            totalBuildAreaM2: 0,
-            scalePixelsPerMeter: 40
-          }
-        };
-      }
-    });
+        ],
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          responseMimeType: 'application/json',
+          responseSchema: FLOOR_PLAN_RESPONSE_SCHEMA,
+          temperature: 0.7 + i * 0.1,
+        },
+      })
+    );
 
+    const variants = await resolveVariants(calls, PHOTO_VARIATION_DIRECTIONS, 'variant-photo', brief);
     res.json({ success: true, variants });
-  } catch (error: any) {
-    console.error("Photo design generation error:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: "AI Generation Error", 
-      message: error?.message || "Failed to process image and generate design." 
+  } catch (error) {
+    // ValidationError carries a message that is safe and useful to show a user.
+    if (error instanceof ValidationError) {
+      return res.status(400).json({ success: false, error: 'Invalid Image', message: error.message });
+    }
+    console.error('Photo design generation error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'AI Generation Error',
+      message: 'Failed to process image and generate design.',
     });
   }
 });
 
-app.post("/api/analyze-blueprint", async (req, res) => {
+app.post('/api/analyze-blueprint', async (req, res) => {
   try {
-    const { plan } = req.body;
+    const noKey = missingKey();
+    if (noKey) return res.status(noKey.status).json(noKey.body);
 
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === "MY_GEMINI_API_KEY") {
-      return res.status(400).json({ 
-        error: "Missing API Key", 
-        message: "Gemini API key is not configured." 
-      });
-    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const plan = normalizePlan(body.plan);
 
     const analyzePrompt = `
-      You are an expert architectural reviewer. 
+      You are an expert architectural reviewer.
       Analyze the following floor plan JSON data for:
       1. Structural issues (e.g., floating walls, unclosed rooms, missing doors).
       2. Flow and circulation issues (e.g., blocked pathways, awkward door swings, inefficient zoning).
@@ -606,47 +617,67 @@ app.post("/api/analyze-blueprint", async (req, res) => {
       Provide a list of detailed issues and suggestions. Incorporate universal design and smart space optimization principles.
       For 'type', use 'error' for critical code/safety issues, 'warning' for flow/accessibility, 'info' for suggestions, and 'success' for well-designed elements.
       Also, provide an 'optimizedPlan' which is a complete, modified version of the floor plan that attempts to resolve these issues (e.g. moving furniture, adjusting walls to improve space utilization and flow). Ensure all mathematical constraints and coordinates are valid.
+      Do not cite specific building-code section numbers; describe requirements in plain language.
     `;
 
     const result = await ai.models.generateContent({
-      model: "gemini-1.5-pro",
+      model: MODELS.audit,
       contents: analyzePrompt,
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: "application/json",
+        responseMimeType: 'application/json',
         responseSchema: AUDIT_RESPONSE_SCHEMA,
-        temperature: 0.2 // Lower temperature for analytical task
-      }
+        temperature: 0.2, // Lower temperature for analytical task
+      },
     });
 
-    const parsedData = JSON.parse(result.text || "{}");
-    
+    const parsed = (() => {
+      try {
+        return JSON.parse(result.text || '{}');
+      } catch {
+        return {};
+      }
+    })();
+
+    const issues = Array.isArray(parsed.issues) ? parsed.issues.slice(0, 100) : [];
+
     res.json({
       success: true,
-      issues: parsedData.issues || [],
-      optimizedPlan: parsedData.optimizedPlan || plan
+      issues,
+      optimizedPlan: parsed.optimizedPlan ? normalizePlan(parsed.optimizedPlan) : null,
     });
-
-  } catch (error: any) {
-    console.error("Audit generation error:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: "AI Audit Error", 
-      message: error?.message || "Failed to analyze the blueprint." 
+  } catch (error) {
+    console.error('Audit generation error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'AI Audit Error',
+      message: 'Failed to analyze the blueprint.',
     });
   }
 });
 
-app.post("/api/optimize-costs", async (req, res) => {
+app.post('/api/optimize-costs', async (req, res) => {
   try {
-    const { plan, metrics, costs, qualityLevel, region } = req.body;
+    const noKey = missingKey();
+    if (noKey) return res.status(noKey.status).json(noKey.body);
 
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === "MY_GEMINI_API_KEY") {
-      return res.status(400).json({ 
-        error: "Missing API Key", 
-        message: "Gemini API key is not configured." 
-      });
-    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const qualityLevel = cleanText(body.qualityLevel, 40) || 'standard';
+    const region = cleanText(body.region, 40) || 'global-average';
+
+    const metrics = (body.metrics ?? {}) as Record<string, unknown>;
+    const costs = (body.costs ?? {}) as Record<string, unknown>;
+
+    const m = {
+      areaM2: clampNum(metrics.areaM2, 0, 0, 1e6),
+      wallLengthM: clampNum(metrics.wallLengthM, 0, 0, 1e6),
+      doors: clampInt(metrics.doors, 0, 0, 10000),
+      windows: clampInt(metrics.windows, 0, 0, 10000),
+    };
+    const c = {
+      total: clampNum(costs.total, 0, 0, 1e12),
+      subtotal: clampNum(costs.subtotal, 0, 0, 1e12),
+    };
 
     const prompt = `
       You are an expert construction cost estimator and value engineer.
@@ -655,147 +686,197 @@ app.post("/api/optimize-costs", async (req, res) => {
       Project Parameters:
       - Quality Level: ${qualityLevel}
       - Region: ${region}
-      - Total Cost Estimate: $${costs.total.toFixed(0)}
-      - Subtotal Cost: $${costs.subtotal.toFixed(0)}
-      
+      - Total Cost Estimate: $${c.total.toFixed(0)}
+      - Subtotal Cost: $${c.subtotal.toFixed(0)}
+
       Quantities:
-      - Area: ${metrics.areaM2.toFixed(1)} m2
-      - Walls: ${metrics.wallLengthM.toFixed(1)} linear meters
-      - Doors: ${metrics.doors}
-      - Windows: ${metrics.windows}
+      - Area: ${m.areaM2.toFixed(1)} m2
+      - Walls: ${m.wallLengthM.toFixed(1)} linear meters
+      - Doors: ${m.doors}
+      - Windows: ${m.windows}
 
       Floor Plan Context:
-      ${JSON.stringify(plan)}
+      ${JSON.stringify(normalizePlan(body.plan))}
 
       Provide 3 to 4 actionable, high-value suggestions to optimize the construction costs or material selections for this specific design and quality level. Focus on spatial efficiency, material rationalization, and structural simplification. Return only a JSON array of strings.
     `;
 
     const result = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
+      model: MODELS.cost,
       contents: prompt,
       config: {
-        responseMimeType: "application/json",
+        responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
-          items: { type: Type.STRING }
+          items: { type: Type.STRING },
         },
-        temperature: 0.4
-      }
+        temperature: 0.4,
+      },
     });
 
-    const suggestions = JSON.parse(result.text || "[]");
-    
+    let suggestions: unknown;
+    try {
+      suggestions = JSON.parse(result.text || '[]');
+    } catch {
+      suggestions = [];
+    }
+
     res.json({
       success: true,
-      suggestions: suggestions
+      suggestions: Array.isArray(suggestions)
+        ? suggestions.filter((s): s is string => typeof s === 'string' && s.trim().length > 0).slice(0, 10)
+        : [],
     });
-
-  } catch (error: any) {
-    console.error("Cost optimization error:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: "AI Optimization Error", 
-      message: error?.message || "Failed to generate cost optimizations." 
+  } catch (error) {
+    console.error('Cost optimization error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'AI Optimization Error',
+      message: 'Failed to generate cost optimizations.',
     });
   }
 });
 
-app.post("/api/architect-chat", async (req, res) => {
+app.post('/api/architect-chat', async (req, res) => {
   try {
-    const { messages, plan } = req.body;
+    const noKey = missingKey();
+    if (noKey) return res.status(noKey.status).json(noKey.body);
 
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === "MY_GEMINI_API_KEY") {
-      return res.status(400).json({ 
-        error: "Missing API Key", 
-        message: "Gemini API key is not configured." 
-      });
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const messages = normalizeMessages(body.messages);
+    if (messages.length === 0) {
+      return res.status(400).json({ success: false, error: 'Invalid Request', message: 'No message content provided.' });
     }
+
+    const plan = normalizePlan(body.plan);
 
     const systemPrompt = `
       You are an expert architect AI assistant for LandCraft AI.
       You answer user questions about architecture, space planning, building codes, and floor plan design.
       If the user asks you to generate, modify, or create a floor plan based on their requirements, use the \`generate_floor_plan\` function.
-      
+
       Current Floor Plan Context (if any):
       ${JSON.stringify(plan)}
 
       Keep your answers concise, professional, and helpful. Use markdown for formatting.
+      Do not invent building-code section numbers; describe requirements in plain language.
     `;
 
-    // Map messages to Gemini format
-    const formattedMessages = messages.map((m: any) => ({
-      role: m.role === "user" ? "user" : "model",
-      parts: [{ text: m.content }]
+    const formattedMessages = messages.map((m) => ({
+      role: m.role,
+      parts: [{ text: m.text }],
     }));
 
     const result = await ai.models.generateContent({
-      model: "gemini-1.5-pro",
+      model: MODELS.chat,
       contents: formattedMessages,
       config: {
         systemInstruction: systemPrompt,
-        tools: [{
-          functionDeclarations: [
-            {
-              name: "generate_floor_plan",
-              description: "Generates a new floor plan based on the user's request. Call this when the user explicitly asks to generate, create, or update the floor plan.",
-              parameters: FLOOR_PLAN_RESPONSE_SCHEMA
-            }
-          ]
-        }],
-        temperature: 0.7
-      }
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: 'generate_floor_plan',
+                description:
+                  "Generates a new floor plan based on the user's request. Call this when the user explicitly asks to generate, create, or update the floor plan.",
+                parameters: FLOOR_PLAN_RESPONSE_SCHEMA,
+              },
+            ],
+          },
+        ],
+        temperature: 0.7,
+      },
     });
 
-    let generatedPlan = null;
-    let responseText = result.text || "";
+    let generatedPlan: unknown = null;
+    let responseText = result.text || '';
 
     const functionCalls = result.functionCalls;
     if (functionCalls && functionCalls.length > 0) {
-       const call = functionCalls[0];
-       if (call.name === "generate_floor_plan") {
-          generatedPlan = call.args;
-          if (!responseText) {
-             responseText = "I've generated a new floor plan based on your request. Check it out!";
-          }
-       }
+      const call = functionCalls[0];
+      if (call.name === 'generate_floor_plan' && call.args) {
+        const args = call.args as Record<string, unknown>;
+        // Normalize so the client can load this straight onto the canvas.
+        generatedPlan = { ...args, plan: normalizePlan(args.plan) };
+        if (!responseText) {
+          responseText = "I've generated a new floor plan based on your request. Check it out!";
+        }
+      }
     }
 
-    res.json({
-      success: true,
-      text: responseText,
-      generatedPlan
-    });
-
-  } catch (error: any) {
-    console.error("Chat error:", error);
-    res.status(500).json({ 
-      success: false, 
-      error: "AI Chat Error", 
-      message: error?.message || "Failed to process chat" 
+    res.json({ success: true, text: responseText, generatedPlan });
+  } catch (error) {
+    console.error('Chat error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'AI Chat Error',
+      message: 'Failed to process chat.',
     });
   }
 });
 
+// ---------------------------------------------------------------------------
+// Error handling
+//
+// Without these two handlers Express replies with an HTML page for body-parser
+// failures (413, malformed JSON), so `response.json()` on the client throws and
+// the user sees a generic message instead of the real one.
+// ---------------------------------------------------------------------------
+
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const isBodyTooLarge = err?.type === 'entity.too.large' || err?.status === 413;
+  const isBadJson = err?.type === 'entity.parse.failed';
+
+  if (isBodyTooLarge) {
+    return res.status(413).json({
+      success: false,
+      error: 'Payload Too Large',
+      message: 'That upload is too big. Please use an image under 10 MB.',
+    });
+  }
+  if (isBadJson) {
+    return res.status(400).json({ success: false, error: 'Invalid JSON', message: 'Request body is not valid JSON.' });
+  }
+
+  console.error('Unhandled error:', err);
+  res.status(500).json({ success: false, error: 'Server Error', message: 'An unexpected server error occurred.' });
+});
+
+// ---------------------------------------------------------------------------
 // Start server Vite middleware integration
+// ---------------------------------------------------------------------------
+
 async function startServer() {
   // Integrate Vite for asset bundling in development
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
-      appType: "spa",
+      appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
     // Serve static files in production
-    const distPath = path.join(process.cwd(), "dist");
+    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[LandCraft AI] Server booting up on port ${PORT}`);
+    console.log(`[LandCraft AI] Models: ${JSON.stringify(MODELS)}`);
+  });
+
+  // Without this, a port conflict throws an unhandled 'error' event and kills
+  // the process with an opaque stack trace.
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[LandCraft AI] Port ${PORT} is already in use. Set PORT to a different value.`);
+    } else {
+      console.error('[LandCraft AI] Server error:', err);
+    }
+    process.exit(1);
   });
 }
 

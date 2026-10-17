@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Sparkles, 
   CheckCircle2, 
@@ -17,7 +17,6 @@ import {
   ChevronDown,
   Layout,
   RefreshCw,
-  HelpCircle,
   Clock,
   MapPin,
   Check,
@@ -30,6 +29,7 @@ import {
 } from 'lucide-react';
 import { FloorPlanData, AIReviewItem, DimensionUnit } from '../types';
 import { checkOverlapWarnings } from '../utils/geoUtils';
+import { apiPost } from '../utils/apiClient';
 
 interface AiAssistantPanelProps {
   plan: FloorPlanData;
@@ -114,14 +114,27 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
 
   // Continuous Static Verification Rules State
   const [reviews, setReviews] = useState<AIReviewItem[]>([]);
+
+  /**
+   * Always-current handle on runStaticAudit, so the debounced effect below can
+   * call the latest closure without re-subscribing on every render.
+   */
+  const runStaticAuditRef = useRef<() => void>(() => {});
   const [isAuditing, setIsAuditing] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<'all' | 'structure' | 'flow' | 'accessibility' | 'safety'>('all');
   const [optimizedPlan, setOptimizedPlan] = useState<FloorPlanData | null>(null);
 
-  // Run dynamic verification whenever the parent editor's floor plan updates
+  // Run dynamic verification whenever the parent editor's floor plan updates.
+  //
+  // `plan` changes on every mousemove during a drag, so running this
+  // synchronously re-rendered the whole findings board dozens of times per
+  // second. Debounce to one pass after the interaction settles.
   useEffect(() => {
-    runStaticAudit();
-    setOptimizedPlan(null); // Reset optimized plan when user makes changes
+    setOptimizedPlan(null); // An optimization is stale the moment the plan changes
+    const timer = window.setTimeout(() => {
+      runStaticAuditRef.current();
+    }, 250);
+    return () => window.clearTimeout(timer);
   }, [plan, unit]);
 
   // Loading animation phase rotator
@@ -170,28 +183,18 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
     setGeneratedVariants([]);
 
     try {
-      const response = await fetch('/api/design-from-photo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: photoPreview,
-          mimeType: photoFile?.type || "image/jpeg",
-          prompt: promptInput,
-          plotWidth,
-          plotLength,
-          bedrooms,
-          bathrooms,
-          floors,
-          style,
-          variantsCount
-        })
+      const result = await apiPost('/api/design-from-photo', {
+        imageBase64: photoPreview,
+        mimeType: photoFile?.type || 'image/jpeg',
+        prompt: promptInput,
+        plotWidth,
+        plotLength,
+        bedrooms,
+        bathrooms,
+        floors,
+        style,
+        variantsCount
       });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.message || result.error || "Failed to analyze photo and generate plan.");
-      }
 
       if (result.success && result.variants && result.variants.length > 0) {
         setGeneratedVariants(result.variants);
@@ -218,26 +221,16 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
     setGeneratedVariants([]);
 
     try {
-      const response = await fetch('/api/generate-floor-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: promptInput,
-          plotWidth,
-          plotLength,
-          bedrooms,
-          bathrooms,
-          floors,
-          style,
-          variantsCount
-        })
+      const result = await apiPost('/api/generate-floor-plan', {
+        prompt: promptInput,
+        plotWidth,
+        plotLength,
+        bedrooms,
+        bathrooms,
+        floors,
+        style,
+        variantsCount
       });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.message || result.error || "Failed to communicate with AI Architect.");
-      }
 
       if (result.success && result.variants && result.variants.length > 0) {
         setGeneratedVariants(result.variants);
@@ -323,8 +316,8 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         id: 'no-doors',
         type: 'error',
         category: 'flow',
-        title: 'Safety: Missing Exterior Doors',
-        message: 'No doors detected! Your building shell lacks an active point of entry and safe emergency escape routes.'
+        title: 'Safety: Missing Doors',
+        message: 'No doors detected! Your building shell has no point of entry and no marked emergency escape route.'
       });
     }
 
@@ -334,7 +327,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         type: 'warning',
         category: 'flow',
         title: 'Daylighting & Ventilation',
-        message: 'No windows detected. International Building Code (IBC) requires natural light window area to be at least 8-10% of room floor area.'
+        message: 'No windows detected. Most residential codes require natural light and ventilation in habitable rooms — add windows to living and sleeping areas.'
       });
     }
 
@@ -344,7 +337,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         id: 'narrow-doors',
         type: 'warning',
         category: 'accessibility',
-        title: 'ADA Access: Narrow Doorways',
+        title: 'Access: Narrow Doorways',
         message: `Detected ${narrowDoors.length} doorway(s) under 32" (0.8m). Universal Design recommends 32"-36" doors for wheelchair accessibility.`
       });
     } else if (doors.length > 0) {
@@ -387,7 +380,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         type: 'success',
         category: 'safety',
         title: 'Clear Circulation Paths',
-        message: 'No furniture overlaps or door swing blocks detected. Interior pathways have optimal physical clearances.'
+        message: 'No furniture-furniture overlaps, out-of-room placements, or blocked door swings detected among the elements checked.'
       });
     }
 
@@ -396,11 +389,16 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
       type: 'info',
       category: 'flow',
       title: 'Passive Solar Design Hint',
-      message: 'Place primary living room windows on the south-facing wall (northern hemisphere) to optimize thermal gain during winter months.'
+      message:
+        'Orient main living-space windows toward the sun\'s path to capture winter heat: south-facing in the Northern Hemisphere, north-facing in the Southern Hemisphere. East glazing suits morning light, west glazing risks afternoon overheating.'
     });
 
     setReviews(items);
   };
+
+  useEffect(() => {
+    runStaticAuditRef.current = runStaticAudit;
+  });
 
   const handleDeepAiAudit = async () => {
     setIsAuditing(true);
@@ -408,15 +406,9 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
     setOptimizedPlan(null);
 
     try {
-      const response = await fetch('/api/analyze-blueprint', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan })
-      });
+      const data = await apiPost('/api/analyze-blueprint', { plan });
 
-      const data = await response.json();
-      
-      if (!response.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.message || 'Audit failed');
       }
 

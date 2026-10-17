@@ -16,6 +16,15 @@ export interface RoomSuggestion {
   roomId: string;
   currentLabel: string;
   suggestedName: string;
+  /**
+   * Hand-tuned rule score on a 0-100 scale.
+   *
+   * This is NOT a probability, a model confidence, or a match percentage. It
+   * is a constant chosen per rule branch by the deterministic inference
+   * function below, which calls no AI model. The UI must label it as a
+   * heuristic (it previously rendered as "96% match", implying a measurement
+   * that was never taken).
+   */
   confidence: number; // 0 - 100
   category: 'bedroom' | 'bathroom' | 'kitchen' | 'living' | 'dining' | 'office' | 'utility' | 'storage' | 'general';
   reason: string;

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, Send, Bot, User, Maximize2, Minimize2, Loader2, RefreshCw } from 'lucide-react';
 import { FloorPlanData } from '../types';
+import { apiPost } from '../utils/apiClient';
 import Markdown from 'react-markdown';
 
 interface ChatMessage {
@@ -51,13 +52,12 @@ export default function ArchitectChatPanel({ plan, onClose, onUpdatePlan }: Arch
         content: m.content
       })).concat([{ role: 'user', content: userMessage.content }]);
 
-      const response = await fetch('/api/architect-chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: chatHistory, plan })
-      });
-
-      const data = await response.json();
+      // apiPost checks response.ok before parsing, so Express's HTML error
+      // pages no longer surface as an opaque SyntaxError.
+      const data = await apiPost<{ success: boolean; text?: string; generatedPlan?: any; message?: string }>(
+        '/api/architect-chat',
+        { messages: chatHistory, plan }
+      );
 
       if (!data.success) {
         throw new Error(data.message || 'Chat failed');
@@ -144,7 +144,7 @@ export default function ArchitectChatPanel({ plan, onClose, onUpdatePlan }: Arch
                 ? 'bg-emerald-600 text-white rounded-tr-none' 
                 : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'
             }`}>
-              <div className="markdown-body prose prose-invert prose-sm max-w-none">
+              <div className="prose prose-invert prose-sm max-w-none">
                 <Markdown>{msg.content}</Markdown>
               </div>
             </div>

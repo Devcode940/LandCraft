@@ -4,22 +4,18 @@
  */
 
 import React from 'react';
-import { 
-  Undo2, 
-  Redo2, 
-  Trash2, 
-  Grid, 
-  Eye, 
-  EyeOff, 
-  Download, 
-  FileCode, 
-  Eye as HighContrastIcon, 
-  ZoomIn, 
-  ZoomOut, 
+import {
+  Undo2,
+  Redo2,
+  Trash2,
+  Grid,
+  Download,
+  FileCode,
+  Eye as HighContrastIcon,
+  ZoomIn,
+  ZoomOut,
   Maximize2,
   FolderOpen,
-  Settings,
-  FlameKindling,
   Box,
   Calculator,
   Ruler,
@@ -27,9 +23,10 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
-  PanelRightOpen
+  PanelRightOpen,
 } from 'lucide-react';
 import { DimensionUnit } from '../types';
+import { MIN_ZOOM, MAX_ZOOM, ZOOM_STEP } from '../constants';
 
 interface ToolbarProps {
   unit: DimensionUnit;
@@ -58,7 +55,51 @@ interface ToolbarProps {
   isRightSidebarOpen?: boolean;
   onToggleRightSidebar?: () => void;
   zoom: number;
-  setZoom: (z: number) => void;
+  setZoom: React.Dispatch<React.SetStateAction<number>>;
+}
+
+type ButtonState = 'idle' | 'active' | 'disabled';
+
+/**
+ * Return ONE complete class string per button.
+ *
+ * The previous implementation concatenated `btnStyle()` and `activeBtnStyle()`,
+ * both of which set `background-color`. Tailwind resolves same-specificity
+ * collisions by position in the generated stylesheet, not by order in the class
+ * attribute -- and `.bg-white` is emitted after `.bg-emerald-600`, so every
+ * "active" toggle rendered with the idle background. Never compose two strings
+ * that style the same property; pick one.
+ */
+function buttonClass(state: ButtonState, highContrast: boolean): string {
+  const shape = highContrast
+    ? 'p-1.5 rounded text-xs font-bold border-2 border-black flex items-center gap-1 cursor-pointer transition-colors'
+    : 'p-2 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-colors';
+
+  if (highContrast) {
+    if (state === 'disabled') return `${shape} bg-gray-100 text-gray-400 border-gray-300 cursor-not-allowed`;
+    if (state === 'active') return `${shape} bg-black text-white hover:bg-slate-800`;
+    return `${shape} bg-white text-black hover:bg-black hover:text-white`;
+  }
+
+  if (state === 'disabled') {
+    return `${shape} bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed`;
+  }
+  if (state === 'active') {
+    return `${shape} bg-emerald-600 border-emerald-600 text-white dark:bg-emerald-700 dark:border-emerald-700 hover:bg-emerald-700 dark:hover:bg-emerald-800 cursor-pointer`;
+  }
+  return `${shape} bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer`;
+}
+
+/** Idle button with a coloured hover accent (export / open-panel actions). */
+function accentButtonClass(highContrast: boolean, accent: 'emerald' | 'blue' | 'red'): string {
+  const base = buttonClass('idle', highContrast);
+  const hover =
+    accent === 'emerald'
+      ? 'hover:border-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400'
+      : accent === 'blue'
+        ? 'hover:border-blue-500 hover:text-blue-600 dark:hover:text-blue-400'
+        : 'hover:border-red-500 hover:text-red-600 dark:hover:text-red-400';
+  return highContrast ? base : `${base} ${hover}`;
 }
 
 export default function Toolbar({
@@ -88,63 +129,38 @@ export default function Toolbar({
   isRightSidebarOpen = true,
   onToggleRightSidebar,
   zoom,
-  setZoom
+  setZoom,
 }: ToolbarProps) {
-
   const toolbarBg = highContrast
     ? 'bg-white border-b-2 border-black text-black'
     : 'bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200';
 
-  const btnStyle = (disabled = false) => {
-    if (highContrast) {
-      return `p-1.5 rounded text-xs font-bold border border-black flex items-center gap-1 cursor-pointer transition-colors ${
-        disabled 
-          ? 'bg-gray-100 text-gray-400 border-gray-300' 
-          : 'bg-white text-black hover:bg-black hover:text-white'
-      }`;
-    }
-    return `p-2 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-colors cursor-pointer ${
-      disabled 
-        ? 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed' 
-        : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-    }`;
-  };
-
-  const activeBtnStyle = (isActive: boolean) => {
-    if (highContrast) {
-      return isActive 
-        ? 'bg-black text-white border-2 border-black font-bold' 
-        : 'bg-white text-black border border-black font-bold';
-    }
-    return isActive
-      ? 'bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-700 dark:border-emerald-700 hover:bg-emerald-700 dark:hover:bg-emerald-800'
-      : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700';
-  };
+  const divider = <div className="h-5 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />;
 
   return (
     <div id="toolbar-container" className={`p-3 flex flex-wrap gap-3 items-center justify-between ${toolbarBg}`}>
       {/* 1. Sidebars & History & Modification */}
       <div className="flex items-center gap-1.5">
-        {/* Toggle Left Sidebar (Palette) */}
         {onToggleLeftSidebar && (
           <button
             id="toggle-left-sidebar-btn"
             onClick={onToggleLeftSidebar}
-            className={`${btnStyle()} ${activeBtnStyle(isLeftSidebarOpen)}`}
-            title={isLeftSidebarOpen ? "Hide Left Sidebar (Catalog & Tools)" : "Show Left Sidebar (Catalog & Tools)"}
+            className={buttonClass(isLeftSidebarOpen ? 'active' : 'idle', highContrast)}
+            title={isLeftSidebarOpen ? 'Hide Left Sidebar (Catalog & Tools)' : 'Show Left Sidebar (Catalog & Tools)'}
+            aria-pressed={isLeftSidebarOpen}
           >
             {isLeftSidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
             <span className="hidden sm:inline">Palette</span>
           </button>
         )}
 
-        <div className="h-5 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
+        {divider}
 
         <button
           id="undo-btn"
           onClick={onUndo}
           disabled={!canUndo}
-          className={btnStyle(!canUndo)}
+          className={buttonClass(canUndo ? 'idle' : 'disabled', highContrast)}
           title="Undo last change"
         >
           <Undo2 className="w-4 h-4" />
@@ -154,17 +170,19 @@ export default function Toolbar({
           id="redo-btn"
           onClick={onRedo}
           disabled={!canRedo}
-          className={btnStyle(!canRedo)}
+          className={buttonClass(canRedo ? 'idle' : 'disabled', highContrast)}
           title="Redo next change"
         >
           <Redo2 className="w-4 h-4" />
           <span className="hidden sm:inline">Redo</span>
         </button>
-        <div className="h-5 w-px bg-slate-200 dark:bg-slate-800 mx-1" />
+
+        {divider}
+
         <button
           id="clear-canvas-btn"
           onClick={onClear}
-          className={`${btnStyle()} hover:text-red-600 dark:hover:text-red-400`}
+          className={accentButtonClass(highContrast, 'red')}
           title="Wipe canvas clean"
         >
           <Trash2 className="w-4 h-4" />
@@ -174,45 +192,44 @@ export default function Toolbar({
 
       {/* 2. Snaps & Grid Configuration */}
       <div className="flex items-center gap-1.5">
-        {/* Toggle Grid */}
         <button
           id="toggle-grid-snap-btn"
           onClick={() => setSnapToGrid(!snapToGrid)}
-          className={`${btnStyle()} ${activeBtnStyle(snapToGrid)}`}
+          className={buttonClass(snapToGrid ? 'active' : 'idle', highContrast)}
           title="Snap elements to drawing grid"
+          aria-pressed={snapToGrid}
         >
           <Grid className="w-4 h-4" />
           <span className="hidden sm:inline">Grid Snap</span>
         </button>
 
-        {/* Toggle Wall snap */}
         <button
           id="toggle-wall-snap-btn"
           onClick={() => setSnapToElements(!snapToElements)}
-          className={`${btnStyle()} ${activeBtnStyle(snapToElements)}`}
+          className={buttonClass(snapToElements ? 'active' : 'idle', highContrast)}
           title="Snap joints and windows to walls"
+          aria-pressed={snapToElements}
         >
           <Maximize2 className="w-4 h-4" />
           <span className="hidden sm:inline">Element Snap</span>
         </button>
 
-        {/* Toggle Unit Metric vs Imperial */}
         <button
           id="toggle-unit-btn"
           onClick={() => setUnit(unit === 'm' ? 'ft' : 'm')}
-          className={`${btnStyle()} font-mono font-bold`}
+          className={buttonClass('idle', highContrast)}
           title="Toggle Metric (meters) vs Imperial (feet/inches)"
         >
-          <span>Unit: {unit === 'm' ? 'Metric' : 'Imperial'}</span>
+          <span className="font-mono font-bold">Unit: {unit === 'm' ? 'Metric' : 'Imperial'}</span>
         </button>
 
-        {/* Toggle Real-time Wall Length & Width Labels */}
         {setShowWallLabels && (
           <button
             id="toggle-wall-labels-btn"
             onClick={() => setShowWallLabels(!showWallLabels)}
-            className={`${btnStyle()} ${activeBtnStyle(showWallLabels)}`}
+            className={buttonClass(showWallLabels ? 'active' : 'idle', highContrast)}
             title="Toggle real-time Length and Width labels on all wall segments"
+            aria-pressed={showWallLabels}
           >
             <Ruler className="w-4 h-4" />
             <span className="hidden sm:inline">Wall L×W</span>
@@ -224,19 +241,17 @@ export default function Toolbar({
       <div className="flex items-center gap-1.5">
         <button
           id="zoom-out-btn"
-          onClick={() => setZoom(Math.max(0.5, zoom - 0.1))}
-          className={btnStyle()}
+          onClick={() => setZoom((z) => Math.max(MIN_ZOOM, +(z - ZOOM_STEP).toFixed(2)))}
+          className={buttonClass('idle', highContrast)}
           title="Zoom Out"
         >
           <ZoomOut className="w-4 h-4" />
         </button>
-        <span className="text-xs font-mono font-bold min-w-[44px] text-center">
-          {Math.round(zoom * 100)}%
-        </span>
+        <span className="text-xs font-mono font-bold min-w-[44px] text-center">{Math.round(zoom * 100)}%</span>
         <button
           id="zoom-in-btn"
-          onClick={() => setZoom(Math.min(2.0, zoom + 0.1))}
-          className={btnStyle()}
+          onClick={() => setZoom((z) => Math.min(MAX_ZOOM, +(z + ZOOM_STEP).toFixed(2)))}
+          className={buttonClass('idle', highContrast)}
           title="Zoom In"
         >
           <ZoomIn className="w-4 h-4" />
@@ -244,7 +259,7 @@ export default function Toolbar({
         <button
           id="zoom-reset-btn"
           onClick={() => setZoom(1.0)}
-          className={btnStyle()}
+          className={buttonClass('idle', highContrast)}
           title="Reset Zoom to 100%"
         >
           <span>1:1</span>
@@ -265,8 +280,11 @@ export default function Toolbar({
             }}
             className="text-xs font-semibold bg-transparent border-none focus:ring-0 text-slate-700 dark:text-slate-300 pr-4 py-1 cursor-pointer"
             defaultValue=""
+            aria-label="Load a starter plan"
           >
-            <option value="" disabled>Load Starter Plan...</option>
+            <option value="" disabled>
+              Load Starter Plan...
+            </option>
             <option value="oneBedroom">Modern 1-Bedroom Apartment</option>
             <option value="tinyStudio">Cozy Tiny Studio (Off-Grid)</option>
           </select>
@@ -275,23 +293,22 @@ export default function Toolbar({
 
       {/* 5. Exporters & High Contrast */}
       <div className="flex items-center gap-1.5">
-        {/* High Contrast Mode Toggle */}
         <button
           id="toggle-high-contrast-btn"
           onClick={() => setHighContrast(!highContrast)}
-          className={`${btnStyle()} ${activeBtnStyle(highContrast)}`}
+          className={buttonClass(highContrast ? 'active' : 'idle', highContrast)}
           title="Toggle High Contrast Accessible Drafting mode"
+          aria-pressed={highContrast}
         >
           <HighContrastIcon className="w-4 h-4" />
           <span className="hidden lg:inline">High Contrast</span>
         </button>
 
-        {/* Auto-Label Rooms */}
         {onOpenAutoLabeler && (
           <button
             id="auto-label-rooms-btn"
             onClick={onOpenAutoLabeler}
-            className={`${btnStyle()} hover:border-emerald-500 hover:text-emerald-500 text-emerald-600 dark:text-emerald-400 font-bold`}
+            className={accentButtonClass(highContrast, 'emerald')}
             title="Auto-label room names based on dimensions & placed furniture"
           >
             <Sparkles className="w-4 h-4 text-emerald-500" />
@@ -299,59 +316,55 @@ export default function Toolbar({
           </button>
         )}
 
-        {/* Cost Estimator */}
         <button
           id="cost-estimator-btn"
           onClick={onOpenEstimator}
-          className={`${btnStyle()} hover:border-emerald-500 hover:text-emerald-500`}
+          className={accentButtonClass(highContrast, 'emerald')}
           title="Open Construction Cost Estimator"
         >
           <Calculator className="w-4 h-4 text-emerald-500" />
           <span className="hidden sm:inline font-bold">Estimate</span>
         </button>
 
-        {/* View in AR */}
         <button
           id="view-ar-btn"
           onClick={onOpenAR}
-          className={`${btnStyle()} hover:border-blue-500 hover:text-blue-500`}
+          className={accentButtonClass(highContrast, 'blue')}
           title="View plan in Augmented Reality"
         >
           <Box className="w-4 h-4 text-blue-500" />
           <span className="hidden sm:inline font-bold">View in AR</span>
         </button>
 
-        {/* Export SVG */}
         <button
           id="export-svg-btn"
           onClick={onExportSvg}
-          className={btnStyle()}
+          className={accentButtonClass(highContrast, 'emerald')}
           title="Export vector floor plan"
         >
           <Download className="w-4 h-4 text-emerald-500" />
           <span className="hidden sm:inline">Export SVG</span>
         </button>
 
-        {/* Export JSON for 3D Conversion */}
         <button
           id="export-json-btn"
           onClick={onExportJson}
-          className={`${btnStyle()} hover:border-emerald-500 hover:text-emerald-500`}
+          className={accentButtonClass(highContrast, 'emerald')}
           title="Export JSON metadata for 3D web rendering conversion engines"
         >
           <FileCode className="w-4 h-4 text-emerald-500" />
           <span className="hidden sm:inline">Export JSON 3D</span>
         </button>
 
-        <div className="h-5 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
+        {divider}
 
-        {/* Toggle Right Sidebar (Inspector) */}
         {onToggleRightSidebar && (
           <button
             id="toggle-right-sidebar-btn"
             onClick={onToggleRightSidebar}
-            className={`${btnStyle()} ${activeBtnStyle(isRightSidebarOpen)}`}
-            title={isRightSidebarOpen ? "Hide Right Sidebar (Properties & Layers)" : "Show Right Sidebar (Properties & Layers)"}
+            className={buttonClass(isRightSidebarOpen ? 'active' : 'idle', highContrast)}
+            title={isRightSidebarOpen ? 'Hide Right Sidebar (Properties & Layers)' : 'Show Right Sidebar (Properties & Layers)'}
+            aria-pressed={isRightSidebarOpen}
           >
             <span className="hidden sm:inline">Inspector</span>
             {isRightSidebarOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}

@@ -1,1 +1,18 @@
 @import "tailwindcss";
+
+/* Markdown styling for the AI Architect chat. Without this plugin the `prose`
+   classes on the message bodies generate no CSS at all, so model output
+   rendered as unstyled text (no headings, lists, code blocks, or spacing). */
+@plugin "@tailwindcss/typography";
+
+/*
+ * Class-based dark mode.
+ *
+ * Tailwind v4's default `dark:` variant keys off `prefers-color-scheme`, which
+ * meant High Contrast mode could not override it: the shell switched to
+ * white/black while every child kept resolving its `dark:` utilities, so the
+ * "accessible" mode still rendered dark panels on a dark-mode OS.
+ * App.tsx now toggles `.dark` on <html> based on the OS preference and removes
+ * it whenever High Contrast is on.
+ */
+@custom-variant dark (&:where(.dark, .dark *));

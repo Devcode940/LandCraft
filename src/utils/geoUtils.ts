@@ -10,6 +10,14 @@ import { Point, Wall, Room, Opening, Furniture, DimensionUnit } from '../types';
 export const PIXELS_PER_METER = 40;
 export const PIXELS_PER_FOOT = 12.192;
 
+/** Split a pixel length into feet + whole inches, carrying the round-up. */
+export function pixelsToFeetInches(pixels: number): { feet: number; inches: number } {
+  // Round to whole inches FIRST, then split. Rounding the remainder
+  // independently produced impossible values like 5' 12".
+  const totalInches = Math.round((pixels / PIXELS_PER_FOOT) * 12);
+  return { feet: Math.floor(totalInches / 12), inches: totalInches % 12 };
+}
+
 /**
  * Convert pixels to formatted dimension string
  */
@@ -18,9 +26,7 @@ export function formatDimension(pixels: number, unit: DimensionUnit): string {
     const meters = pixels / PIXELS_PER_METER;
     return `${meters.toFixed(2)} m`;
   } else {
-    const totalInches = (pixels / PIXELS_PER_FOOT) * 12;
-    const feet = Math.floor(totalInches / 12);
-    const inches = Math.round(totalInches % 12);
+    const { feet, inches } = pixelsToFeetInches(pixels);
     return `${feet}' ${inches}"`;
   }
 }
@@ -42,14 +48,10 @@ export function formatWallDimensions(
 
     // 40px = 1m = 100cm
     const thicknessCm = Math.round((thicknessPx / PIXELS_PER_METER) * 100);
-    widthStr = thicknessCm >= 100 
-      ? `${(thicknessCm / 100).toFixed(2)}m` 
-      : `${thicknessCm}cm`;
+    widthStr = thicknessCm >= 100 ? `${(thicknessCm / 100).toFixed(2)}m` : `${thicknessCm}cm`;
   } else {
     // Imperial: 12.192px = 1ft
-    const totalInches = (lengthPx / PIXELS_PER_FOOT) * 12;
-    const feet = Math.floor(totalInches / 12);
-    const inches = Math.round(totalInches % 12);
+    const { feet, inches } = pixelsToFeetInches(lengthPx);
     lengthStr = `${feet}' ${inches}"`;
 
     const thicknessInches = Math.round((thicknessPx / PIXELS_PER_FOOT) * 12);
@@ -59,7 +61,7 @@ export function formatWallDimensions(
   return {
     lengthStr,
     widthStr,
-    combinedStr: `L: ${lengthStr} • W: ${widthStr}`
+    combinedStr: `L: ${lengthStr} • W: ${widthStr}`,
   };
 }
 
@@ -77,23 +79,23 @@ export function getClosestPointOnSegment(p: Point, a: Point, b: Point): { point:
   const abX = b.x - a.x;
   const abY = b.y - a.y;
   const abLen2 = abX * abX + abY * abY;
-  
+
   if (abLen2 === 0) {
     const dist = getDistance(p, a);
     return { point: { ...a }, offset: 0, distance: dist };
   }
-  
+
   // Projection factor (t)
   const apX = p.x - a.x;
   const apY = p.y - a.y;
   let t = (apX * abX + apY * abY) / abLen2;
   t = Math.max(0, Math.min(1, t)); // clamp to segment
-  
+
   const closestPoint = {
     x: a.x + t * abX,
-    y: a.y + t * abY
+    y: a.y + t * abY,
   };
-  
+
   const dist = getDistance(p, closestPoint);
   return { point: closestPoint, offset: t, distance: dist };
 }
@@ -104,7 +106,7 @@ export function getClosestPointOnSegment(p: Point, a: Point, b: Point): { point:
 export function snapToGrid(p: Point, gridSize: number): Point {
   return {
     x: Math.round(p.x / gridSize) * gridSize,
-    y: Math.round(p.y / gridSize) * gridSize
+    y: Math.round(p.y / gridSize) * gridSize,
   };
 }
 
@@ -130,9 +132,9 @@ export function getSmartSnap(
     for (const wall of walls) {
       const endpoints = [
         { x: wall.x1, y: wall.y1 },
-        { x: wall.x2, y: wall.y2 }
+        { x: wall.x2, y: wall.y2 },
       ];
-      
+
       for (const ep of endpoints) {
         const d = getDistance(p, ep);
         if (d < elementSnapThreshold && d < bestDist) {
@@ -173,15 +175,15 @@ export function snapOpeningToWalls(
   for (const wall of walls) {
     const a = { x: wall.x1, y: wall.y1 };
     const b = { x: wall.x2, y: wall.y2 };
-    
+
     const { point, offset, distance } = getClosestPointOnSegment(p, a, b);
-    
+
     if (distance < minDistance) {
       minDistance = distance;
       closestWall = wall;
       snappedPoint = point;
       wallOffset = offset;
-      
+
       // Calculate rotation along wall
       const dy = b.y - a.y;
       const dx = b.x - a.x;
@@ -193,7 +195,7 @@ export function snapOpeningToWalls(
     point: snappedPoint,
     wallId: closestWall?.id,
     rotation: closestWall ? rotation : 0,
-    offset: wallOffset
+    offset: wallOffset,
   };
 }
 
@@ -204,11 +206,11 @@ export function calculateRoomArea(width: number, height: number, unit: Dimension
   const widthM = width / PIXELS_PER_METER;
   const heightM = height / PIXELS_PER_METER;
   const areaM2 = widthM * heightM;
-  
+
   if (unit === 'm') {
     return {
       area: areaM2,
-      formatted: `${areaM2.toFixed(1)} m²`
+      formatted: `${areaM2.toFixed(1)} m²`,
     };
   } else {
     const widthFt = width / PIXELS_PER_FOOT;
@@ -216,9 +218,32 @@ export function calculateRoomArea(width: number, height: number, unit: Dimension
     const areaFt2 = widthFt * heightFt;
     return {
       area: areaFt2,
-      formatted: `${areaFt2.toFixed(0)} sq ft`
+      formatted: `${areaFt2.toFixed(0)} sq ft`,
     };
   }
+}
+
+/**
+ * Bounding box of all walls, in pixels. Returns null when there are no walls.
+ * Used to derive build area from the structural envelope rather than from
+ * user-drawn room rectangles (which are often absent or overlapping).
+ */
+export function getWallBounds(walls: Wall[]): { x: number; y: number; width: number; height: number } | null {
+  if (walls.length === 0) return null;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const w of walls) {
+    minX = Math.min(minX, w.x1, w.x2);
+    maxX = Math.max(maxX, w.x1, w.x2);
+    minY = Math.min(minY, w.y1, w.y2);
+    maxY = Math.max(maxY, w.y1, w.y2);
+  }
+
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 /**
@@ -236,57 +261,143 @@ export function checkBoundingBoxCollision(
   );
 }
 
+export function furnitureRect(f: Furniture) {
+  return { x: f.x - f.width / 2, y: f.y - f.height / 2, width: f.width, height: f.height };
+}
+
+const normalizeDeg = (deg: number) => ((deg % 360) + 360) % 360;
+
 /**
- * Check collision of elements (furniture-furniture or door-furniture)
+ * Is `p` inside the swept quarter-disc of a door?
+ *
+ * The canvas draws the leaf from the hinge along local +x, and the swing arc
+ * to (0, ±width). In world space that is the angular sector [rotation,
+ * rotation+90] (or [rotation-90, rotation] when flipped), radius = width.
+ *
+ * The previous implementation used a 2w x 2w box centred on the hinge, which
+ * is twice the swept area and extends through the wall and behind the hinge --
+ * it reported collisions that cannot happen and missed ones that can.
+ */
+export function isPointInDoorSwing(p: Point, op: Opening): boolean {
+  const dx = p.x - op.x;
+  const dy = p.y - op.y;
+  const dist2 = dx * dx + dy * dy;
+  const r = op.width;
+
+  if (dist2 > r * r) return false;
+  if (dist2 < 1e-6) return true; // on the hinge
+
+  const angle = normalizeDeg((Math.atan2(dy, dx) * 180) / Math.PI);
+  const start = normalizeDeg(op.flipSwing ? op.rotation - 90 : op.rotation);
+  return normalizeDeg(angle - start) <= 90;
+}
+
+/** Does an AABB intersect a door's swing sector? */
+export function boxIntersectsDoorSwing(
+  box: { x: number; y: number; width: number; height: number },
+  op: Opening
+): boolean {
+  const corners: Point[] = [
+    { x: box.x, y: box.y },
+    { x: box.x + box.width, y: box.y },
+    { x: box.x, y: box.y + box.height },
+    { x: box.x + box.width, y: box.y + box.height },
+  ];
+  if (corners.some((c) => isPointInDoorSwing(c, op))) return true;
+
+  // Closest point on the box to the hinge: catches a swing that bites into the
+  // middle of an edge without touching a corner.
+  const closest = {
+    x: Math.min(Math.max(op.x, box.x), box.x + box.width),
+    y: Math.min(Math.max(op.y, box.y), box.y + box.height),
+  };
+  return isPointInDoorSwing(closest, op);
+}
+
+export interface OverlapWarning {
+  id: string;
+  elementId: string;
+  type: 'warning';
+  message: string;
+}
+
+/**
+ * Check collision of elements.
+ *
+ * `rooms` is now actually used: the previous version accepted it and ignored
+ * it, which meant room-vs-room overlaps and furniture sitting outside every
+ * room were never reported -- while the UI asserted "No furniture overlaps ...
+ * detected. Interior pathways have optimal physical clearances."
  */
 export function checkOverlapWarnings(
   rooms: Room[],
   openings: Opening[],
   furniture: Furniture[]
-): { id: string; elementId: string; type: 'warning'; message: string }[] {
-  const warnings: { id: string; elementId: string; type: 'warning'; message: string }[] = [];
+): OverlapWarning[] {
+  const warnings: OverlapWarning[] = [];
 
-  // Check furniture overlaps
+  // --- Room vs Room: zones should tile, not stack ---
+  for (let i = 0; i < rooms.length; i++) {
+    for (let j = i + 1; j < rooms.length; j++) {
+      const a = rooms[i];
+      const b = rooms[j];
+      if (checkBoundingBoxCollision(a, b)) {
+        warnings.push({
+          id: `warn-room-${a.id}-${b.id}`,
+          elementId: a.id,
+          type: 'warning',
+          message: `Room zones '${a.label}' and '${b.label}' overlap, which double-counts floor area.`,
+        });
+      }
+    }
+  }
+
   for (let i = 0; i < furniture.length; i++) {
     const f1 = furniture[i];
-    const r1 = { x: f1.x - f1.width / 2, y: f1.y - f1.height / 2, width: f1.width, height: f1.height };
-    
-    // Furniture vs Furniture
+    const r1 = furnitureRect(f1);
+
+    // --- Furniture vs Furniture ---
     for (let j = i + 1; j < furniture.length; j++) {
       const f2 = furniture[j];
-      const r2 = { x: f2.x - f2.width / 2, y: f2.y - f2.height / 2, width: f2.width, height: f2.height };
-      
+      const r2 = furnitureRect(f2);
+
       if (checkBoundingBoxCollision(r1, r2)) {
         warnings.push({
           id: `warn-f-${f1.id}-${f2.id}`,
           elementId: f1.id,
           type: 'warning',
-          message: `Overlap detected between '${f1.label}' and '${f2.label}'.`
+          message: `Overlap detected between '${f1.label}' and '${f2.label}'.`,
         });
       }
     }
 
-    // Furniture vs Doors/Windows (especially door swing areas!)
+    // --- Furniture outside every room boundary ---
+    const insideSomeRoom = rooms.some(
+      (room) =>
+        r1.x >= room.x - 0.5 &&
+        r1.y >= room.y - 0.5 &&
+        r1.x + r1.width <= room.x + room.width + 0.5 &&
+        r1.y + r1.height <= room.y + room.height + 0.5
+    );
+    if (rooms.length > 0 && !insideSomeRoom) {
+      warnings.push({
+        id: `warn-f-outside-${f1.id}`,
+        elementId: f1.id,
+        type: 'warning',
+        message: `'${f1.label}' sits outside every room zone. Place it fully inside a room for accurate area and clearance checks.`,
+      });
+    }
+
+    // --- Furniture blocking a door swing ---
     for (const op of openings) {
-      if (op.type === 'door') {
-        // Approximate a door swing box
-        // Swing is width-sized radius from (x, y)
-        const doorRadius = op.width;
-        const doorBox = {
-          x: op.x - doorRadius,
-          y: op.y - doorRadius,
-          width: doorRadius * 2,
-          height: doorRadius * 2
-        };
-        
-        if (checkBoundingBoxCollision(r1, doorBox)) {
-          warnings.push({
-            id: `warn-f-door-${f1.id}-${op.id}`,
-            elementId: f1.id,
-            type: 'warning',
-            message: `Furniture '${f1.label}' blocks the door swing of '${op.subType === 'single' ? 'Door' : 'Sliding Door'}'.`
-          });
-        }
+      if (op.type !== 'door') continue;
+      if (boxIntersectsDoorSwing(r1, op)) {
+        warnings.push({
+          id: `warn-f-door-${f1.id}-${op.id}`,
+          elementId: f1.id,
+          type: 'warning',
+          message: `'${f1.label}' blocks the swing of the ${op.subType === 'single' ? 'door' : `${op.subType} door`}.`,
+        });
       }
     }
   }

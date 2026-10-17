@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { FloorPlanData, DimensionUnit } from '../types';
 import { X, DollarSign, Calculator, AlertTriangle, Lightbulb, Settings, Building2 } from 'lucide-react';
-import { calculateRoomArea } from '../utils/geoUtils';
+import { getWallBounds } from '../utils/geoUtils';
+import { apiPost } from '../utils/apiClient';
 
 interface CostEstimatorPanelProps {
   plan: FloorPlanData;
@@ -38,7 +39,9 @@ const REGION_MULTIPLIERS: Record<string, number> = {
   'north-america': 1.2,
   'europe': 1.1,
   'asia': 0.8,
+  'africa': 0.7,
   'south-america': 0.7,
+  'middle-east': 0.9,
   'global-average': 1.0,
 };
 
@@ -47,6 +50,12 @@ export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimato
   const [region, setRegion] = useState<string>('global-average');
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [isLoadingAi, setIsLoadingAi] = useState(false);
+  /**
+   * Whether the suggestions shown came from the model or from the local
+   * fallback rules. Previously the fallback rendered under an "AI Cost
+   * Optimization Insights" heading with no way to tell the difference.
+   */
+  const [aiSuggestionSource, setAiSuggestionSource] = useState<'ai' | 'local'>('local');
 
   // Calculate metrics
   const metrics = useMemo(() => {
@@ -54,9 +63,16 @@ export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimato
     plan.rooms.forEach(r => {
       totalAreaPixels += r.width * r.height;
     });
-    
+
     // 40px = 1m -> 1600px^2 = 1m^2
-    const totalAreaM2 = totalAreaPixels / 1600;
+    const roomAreaM2 = totalAreaPixels / 1600;
+
+    // Fall back to the structural envelope. Hand-drawn plans frequently have
+    // walls but no room zones yet, and reporting $0 for those is useless.
+    const bounds = getWallBounds(plan.walls);
+    const envelopeAreaM2 = bounds ? (bounds.width * bounds.height) / 1600 : 0;
+    const totalAreaM2 = roomAreaM2 > 0 ? roomAreaM2 : envelopeAreaM2;
+    const areaIsEnvelope = roomAreaM2 <= 0 && envelopeAreaM2 > 0;
     
     let totalWallLengthPixels = 0;
     plan.walls.forEach(w => {
@@ -75,6 +91,7 @@ export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimato
 
     return {
       areaM2: totalAreaM2,
+      areaIsEnvelope,
       wallLengthM: totalWallLengthM,
       doors: doorsCount,
       windows: windowsCount
@@ -118,23 +135,19 @@ export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimato
 
     const fetchOptimizations = async () => {
       try {
-        const response = await fetch('/api/optimize-costs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            plan,
-            metrics,
-            costs,
-            qualityLevel,
-            region
-          })
+        const data = await apiPost('/api/optimize-costs', {
+          plan,
+          metrics,
+          costs,
+          qualityLevel,
+          region
         });
 
         if (!active) return;
 
-        const data = await response.json();
         if (data.success && data.suggestions && data.suggestions.length > 0) {
           setAiSuggestions(data.suggestions);
+          setAiSuggestionSource('ai');
         } else {
           // Fallback static suggestions if API fails or is unconfigured
           const staticSuggestions = [];
@@ -148,9 +161,10 @@ export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimato
             staticSuggestions.push("High door-to-room ratio. Using open archways in communal areas could save on fixture costs.");
           }
           if (staticSuggestions.length === 0) {
-            staticSuggestions.push("Layout is highly efficient for the selected quality tier. No major cost sinks identified.");
+            staticSuggestions.push("No obvious cost sinks found by the local rule checks. Run an AI pass for deeper value-engineering suggestions.");
           }
           setAiSuggestions(staticSuggestions);
+          setAiSuggestionSource('local');
         }
       } catch (err) {
         if (!active) return;
@@ -159,6 +173,7 @@ export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimato
           metrics.windows > 8 ? "Consider reducing window count to lower fixture costs." : "Window ratio is efficient.",
           "Ensure structural base rate accounts for local building codes."
         ]);
+        setAiSuggestionSource('local');
       } finally {
         if (active) setIsLoadingAi(false);
       }
@@ -229,7 +244,9 @@ export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimato
                   <option value="north-america">North America (+20%)</option>
                   <option value="europe">Europe (+10%)</option>
                   <option value="asia">Asia (-20%)</option>
+                  <option value="africa">Africa (-30%)</option>
                   <option value="south-america">South America (-30%)</option>
+                  <option value="middle-east">Middle East (-10%)</option>
                 </select>
               </div>
             </div>
@@ -241,7 +258,9 @@ export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimato
               </h3>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="bg-slate-900 p-2 rounded border border-slate-800">
-                  <span className="block text-slate-500 mb-1">Total Area</span>
+                  <span className="block text-slate-500 mb-1">
+                    Total Area{metrics.areaIsEnvelope ? ' (envelope)' : ''}
+                  </span>
                   <span className="font-bold text-slate-200">{metrics.areaM2.toFixed(1)} m²</span>
                 </div>
                 <div className="bg-slate-900 p-2 rounded border border-slate-800">
@@ -321,7 +340,10 @@ export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimato
             <div className="bg-blue-950/20 p-5 rounded-xl border border-blue-500/20">
               <h3 className="text-sm font-bold text-blue-400 flex items-center gap-2 mb-3">
                 <Lightbulb className="w-4 h-4" />
-                AI Cost Optimization Insights
+                Cost Optimization Insights
+                <span className="text-[9px] font-mono font-normal uppercase px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                  {aiSuggestionSource === 'ai' ? 'AI generated' : 'Local rules'}
+                </span>
               </h3>
               
               {isLoadingAi ? (

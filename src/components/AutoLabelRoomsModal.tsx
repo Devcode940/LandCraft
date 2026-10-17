@@ -121,11 +121,11 @@ export default function AutoLabelRoomsModal({
               <h2 className="text-base sm:text-lg font-bold flex items-center gap-2">
                 Auto-Label Room Names
                 <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-bold">
-                  AI Heuristic Engine
+                  Rule Engine
                 </span>
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Analyzes room dimensions, aspect ratio, and placed furniture within each boundary to infer architectural names.
+                A deterministic rule engine: it scores room dimensions, aspect ratio, and the furniture placed inside each boundary to infer architectural names. No AI model is called.
               </p>
             </div>
           </div>
@@ -188,9 +188,12 @@ export default function AutoLabelRoomsModal({
                           <span className="text-sm font-bold text-emerald-400">
                             {chosenName}
                           </span>
-                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
-                            {s.confidence}% match
-                          </span>
+                          <span
+                          className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold"
+                          title="Heuristic score from the rule engine (0-100). Not a machine-learning probability."
+                        >
+                          {s.confidence}/100 heuristic
+                        </span>
                           {matchesCurrent && (
                             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 flex items-center gap-1 font-semibold">
                               <Check className="w-2.5 h-2.5" /> Current

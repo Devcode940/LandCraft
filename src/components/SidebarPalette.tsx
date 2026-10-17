@@ -4,23 +4,28 @@
  */
 
 import React, { useState } from 'react';
-import { 
-  Square, 
-  DoorClosed, 
-  Tv, 
-  Bed, 
-  Bath, 
-  Utensils, 
-  Layout, 
-  Hammer, 
-  Ruler, 
-  MousePointer, 
-  Trash2, 
+import {
+  Square,
+  DoorClosed,
+  Tv,
+  Bed,
+  Bath,
+  Utensils,
+  Layout,
+  Hammer,
+  Ruler,
+  MousePointer,
+  Trash2,
   Grid,
   Sparkles,
   ChevronDown,
   ChevronRight,
-  PanelLeftClose
+  PanelLeftClose,
+  Sofa,
+  Armchair,
+  Table,
+  Leaf,
+  Refrigerator
 } from 'lucide-react';
 import { ToolType } from '../types';
 
@@ -36,7 +41,14 @@ interface SidebarPaletteProps {
   } | null;
   setSelectedPaletteItem: (item: any | null) => void;
   highContrast: boolean;
-  onInstantAdd: (type: 'room' | 'opening' | 'furniture', subType: string, label: string, width?: number, height?: number) => void;
+  onInstantAdd: (
+    type: 'room' | 'opening' | 'furniture',
+    subType: string,
+    label: string,
+    width?: number,
+    height?: number,
+    extra?: { color?: string; category?: string }
+  ) => void;
   isOpen?: boolean;
   onToggle?: () => void;
 }
@@ -57,8 +69,15 @@ export default function SidebarPalette({
     setExpandedSection(expandedSection === section ? null : section);
   };
 
-  const handlePaletteSelect = (type: 'room' | 'opening' | 'furniture', subType: string, label: string, width?: number, height?: number) => {
-    setSelectedPaletteItem({ type, subType, label, width, height });
+  const handlePaletteSelect = (
+    type: 'room' | 'opening' | 'furniture',
+    subType: string,
+    label: string,
+    width?: number,
+    height?: number,
+    extra?: { color?: string; category?: string }
+  ) => {
+    setSelectedPaletteItem({ type, subType, label, width, height, ...extra });
     
     // Set appropriate active tool
     if (type === 'room') setActiveTool('room');
@@ -88,15 +107,15 @@ export default function SidebarPalette({
 
   // Furniture categorizations
   const furniturePresets = [
-    { subType: 'bed', label: 'Queen Bed', category: 'bedroom', width: 60, height: 70 },
-    { subType: 'sofa', label: '3-Seater Sofa', category: 'living', width: 70, height: 32 },
-    { subType: 'table', label: 'Dining Table', category: 'kitchen', width: 50, height: 32 },
-    { subType: 'chair', label: 'Dining Chair', category: 'kitchen', width: 14, height: 14 },
-    { subType: 'toilet', label: 'Toilet', category: 'bathroom', width: 16, height: 22 },
-    { subType: 'tub', label: 'Bathtub', category: 'bathroom', width: 50, height: 26 },
-    { subType: 'counter', label: 'Kitchen Counter', category: 'kitchen', width: 60, height: 20 },
-    { subType: 'fridge', label: 'Refrigerator', category: 'kitchen', width: 24, height: 24 },
-    { subType: 'plant', label: 'House Plant', category: 'living', width: 16, height: 16 }
+    { subType: 'bed', label: 'Queen Bed', category: 'bedroom', icon: Bed, width: 60, height: 70 },
+    { subType: 'sofa', label: '3-Seater Sofa', category: 'living', icon: Sofa, width: 70, height: 32 },
+    { subType: 'table', label: 'Dining Table', category: 'kitchen', icon: Table, width: 50, height: 32 },
+    { subType: 'chair', label: 'Dining Chair', category: 'kitchen', icon: Armchair, width: 14, height: 14 },
+    { subType: 'toilet', label: 'Toilet', category: 'bathroom', icon: Bath, width: 16, height: 22 },
+    { subType: 'tub', label: 'Bathtub', category: 'bathroom', icon: Bath, width: 50, height: 26 },
+    { subType: 'counter', label: 'Kitchen Counter', category: 'kitchen', icon: Utensils, width: 60, height: 20 },
+    { subType: 'fridge', label: 'Refrigerator', category: 'kitchen', icon: Refrigerator, width: 24, height: 24 },
+    { subType: 'plant', label: 'House Plant', category: 'living', icon: Leaf, width: 16, height: 16 }
   ];
 
   const sidebarBg = highContrast 
@@ -230,7 +249,11 @@ export default function SidebarPalette({
                 return (
                   <div key={preset.subType} className="flex gap-1.5 items-center">
                     <button
-                      onClick={() => handlePaletteSelect('room', preset.subType, preset.label, preset.width, preset.height)}
+                      onClick={() =>
+                        handlePaletteSelect('room', preset.subType, preset.label, preset.width, preset.height, {
+                          color: preset.color,
+                        })
+                      }
                       className={`flex-1 flex items-center gap-2 p-2 text-left rounded text-xs transition-colors cursor-pointer ${
                         isSelected 
                           ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 border border-emerald-500 font-medium' 
@@ -244,7 +267,11 @@ export default function SidebarPalette({
                       </div>
                     </button>
                     <button 
-                      onClick={() => onInstantAdd('room', preset.subType, preset.label, preset.width, preset.height)}
+                      onClick={() =>
+                        onInstantAdd('room', preset.subType, preset.label, preset.width, preset.height, {
+                          color: preset.color,
+                        })
+                      }
                       className="p-1 text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 rounded h-8 shrink-0 cursor-pointer"
                       title="Instantly center on plan"
                     >
@@ -327,21 +354,29 @@ export default function SidebarPalette({
                 return (
                   <div key={preset.subType} className="flex gap-1.5 items-center">
                     <button
-                      onClick={() => handlePaletteSelect('furniture', preset.subType, preset.label, preset.width, preset.height)}
+                      onClick={() =>
+                        handlePaletteSelect('furniture', preset.subType, preset.label, preset.width, preset.height, {
+                          category: preset.category,
+                        })
+                      }
                       className={`flex-1 flex items-center gap-2 p-2 text-left rounded text-xs transition-colors cursor-pointer ${
                         isSelected 
                           ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 border border-emerald-500 font-medium' 
                           : 'hover:bg-slate-100 dark:hover:bg-slate-900 border border-transparent'
                       }`}
                     >
-                      <Bed className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      <preset.icon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                       <div className="truncate">
                         <div>{preset.label}</div>
                         <div className="text-[9px] text-slate-400">{(preset.width / 40).toFixed(1)}m × {(preset.height / 40).toFixed(1)}m</div>
                       </div>
                     </button>
                     <button 
-                      onClick={() => onInstantAdd('furniture', preset.subType, preset.label, preset.width, preset.height)}
+                      onClick={() =>
+                        onInstantAdd('furniture', preset.subType, preset.label, preset.width, preset.height, {
+                          category: preset.category,
+                        })
+                      }
                       className="p-1 text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 rounded h-8 shrink-0 cursor-pointer"
                       title="Instantly center on plan"
                     >

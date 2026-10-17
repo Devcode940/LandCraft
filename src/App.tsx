@@ -3,23 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { 
-  Sparkles, 
-  HelpCircle, 
-  Info, 
-  Home, 
-  Layers, 
-  Settings, 
-  Ruler, 
-  Flame,
-  CheckCircle2,
-  PanelLeftOpen,
-  PanelRightOpen
-} from 'lucide-react';
-import { FloorPlanData, ToolType, DimensionUnit, LayerVisibility } from './types';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { Sparkles, PanelLeftOpen, PanelRightOpen, Loader2 } from 'lucide-react';
+import { FloorPlanData, ToolType, DimensionUnit, LayerVisibility, Furniture } from './types';
 import { starterPlans } from './utils/sampleData';
-import { calculateRoomArea } from './utils/geoUtils';
+import { normalizePlan } from './utils/normalizePlan';
 
 // Components
 import Toolbar from './components/Toolbar';
@@ -28,28 +16,104 @@ import FloorPlanCanvas from './components/FloorPlanCanvas';
 import PropertyInspector from './components/PropertyInspector';
 import AiAssistantPanel from './components/AiAssistantPanel';
 import DisclaimerBanner from './components/DisclaimerBanner';
-import ARViewer from './components/ARViewer';
 import CostEstimatorPanel from './components/CostEstimatorPanel';
 import ArchitectChatPanel from './components/ArchitectChatPanel';
 import AutoLabelRoomsModal from './components/AutoLabelRoomsModal';
+import ErrorBoundary from './components/ErrorBoundary';
+
+// three.js / R3F / drei / WebXR is ~1.5 MB and sits behind a button most users
+// never press. Keep it out of the initial bundle.
+const ARViewer = lazy(() => import('./components/ARViewer'));
+
+// ---------------------------------------------------------------------------
+// Editor state
+//
+// Previously `plan`, `history`, and `historyIndex` were three separate useState
+// values, and history was pushed through `setTimeout(() => handleStateChange(),
+// 50)` fired from *inside* state updater functions. That produced stale
+// closures, duplicate entries, and impure updaters. A single reducer makes
+// every transition atomic and pure.
+// ---------------------------------------------------------------------------
+
+/** Maximum undo steps retained. Bounds memory; drags no longer grow it forever. */
+const HISTORY_LIMIT = 100;
+
+interface EditorState {
+  plan: FloorPlanData;
+  entries: FloorPlanData[];
+  index: number;
+}
+
+type EditorAction =
+  | { type: 'set'; plan: FloorPlanData; commit: boolean }
+  | { type: 'update'; updater: (prev: FloorPlanData) => FloorPlanData; commit: boolean }
+  | { type: 'commit' }
+  | { type: 'undo' }
+  | { type: 'redo' };
+
+function trimHistory(entries: FloorPlanData[]): FloorPlanData[] {
+  return entries.length > HISTORY_LIMIT ? entries.slice(entries.length - HISTORY_LIMIT) : entries;
+}
+
+function pushHistory(state: EditorState, plan: FloorPlanData): EditorState {
+  // Coalesce: if nothing actually changed, don't add an undo step.
+  if (state.entries[state.index] === plan) return { ...state, plan };
+  const entries = trimHistory([...state.entries.slice(0, state.index + 1), plan]);
+  return { plan, entries, index: entries.length - 1 };
+}
+
+function editorReducer(state: EditorState, action: EditorAction): EditorState {
+  switch (action.type) {
+    case 'set':
+      return action.commit ? pushHistory(state, action.plan) : { ...state, plan: action.plan };
+
+    case 'update': {
+      const plan = action.updater(state.plan);
+      if (plan === state.plan) return state;
+      return action.commit ? pushHistory(state, plan) : { ...state, plan };
+    }
+
+    case 'commit': {
+      // Snapshot the live plan after a burst of uncommitted updates (e.g. the
+      // end of a drag), without changing it.
+      if (state.entries[state.index] === state.plan) return state;
+      const entries = trimHistory([...state.entries.slice(0, state.index + 1), state.plan]);
+      return { ...state, entries, index: entries.length - 1 };
+    }
+
+    case 'undo': {
+      if (state.index <= 0) return state;
+      const index = state.index - 1;
+      return { ...state, index, plan: state.entries[index] };
+    }
+
+    case 'redo': {
+      if (state.index >= state.entries.length - 1) return state;
+      const index = state.index + 1;
+      return { ...state, index, plan: state.entries[index] };
+    }
+
+    default:
+      return state;
+  }
+}
+
+function initialState(): EditorState {
+  // normalizePlan deep-copies, so editing never mutates the shared module constant.
+  const starter = normalizePlan(starterPlans.oneBedroom.data);
+  return { plan: starter, entries: [starter], index: 0 };
+}
+
+// ---------------------------------------------------------------------------
 
 export default function App() {
-  // --- STATE ---
-  const [plan, setPlan] = useState<FloorPlanData>({
-    walls: [],
-    rooms: [],
-    openings: [],
-    furniture: []
-  });
+  const [state, dispatch] = useReducer(editorReducer, undefined, initialState);
+  const { plan, entries, index } = state;
 
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [selectedElementType, setSelectedElementType] = useState<'wall' | 'room' | 'opening' | 'furniture' | null>(null);
   const [activeTool, setActiveTool] = useState<ToolType>('select');
   const [selectedPaletteItem, setSelectedPaletteItem] = useState<any | null>(null);
-  
-  // History State
-  const [history, setHistory] = useState<FloorPlanData[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
 
   // Viewport Settings
   const [zoom, setZoom] = useState(1.0);
@@ -60,8 +124,10 @@ export default function App() {
   const [snapToElements, setSnapToElements] = useState(true);
   const [highContrast, setHighContrast] = useState(false);
 
-  // Layers Visibility
-  const [showWallLabels, setShowWallLabels] = useState(true);
+  // Layers Visibility -- the single source of truth for wall L x W labels.
+  // There used to be a parallel `showWallLabels` state kept in sync by calling
+  // setLayerVisibility from inside another setter's updater (impure, and easy
+  // to desync). One object, one writer.
   const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({
     walls: true,
     rooms: true,
@@ -69,262 +135,345 @@ export default function App() {
     furniture: true,
     dimensions: true,
     wallLabels: true,
-    grid: true
+    grid: true,
   });
 
-  const handleToggleWallLabels = (val: boolean | ((prev: boolean) => boolean)) => {
-    setShowWallLabels(prev => {
-      const next = typeof val === 'function' ? val(prev) : val;
-      setLayerVisibility(curr => ({ ...curr, wallLabels: next }));
-      return next;
-    });
-  };
+  const toggleWallLabels = useCallback(() => {
+    setLayerVisibility((curr) => ({ ...curr, wallLabels: !curr.wallLabels }));
+  }, []);
 
   const [isARViewerOpen, setIsARViewerOpen] = useState(false);
   const [isEstimatorOpen, setIsEstimatorOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isAutoLabelModalOpen, setIsAutoLabelModalOpen] = useState(false);
 
-  // Sidebars visibility states
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
 
-  // Apply auto-labeled room names to plan
-  const handleApplyAutoLabels = (updatedRooms: { id: string; label: string }[]) => {
-    setPlan(prev => {
-      const nextRooms = prev.rooms.map(rm => {
-        const update = updatedRooms.find(u => u.id === rm.id);
-        return update ? { ...rm, label: update.label } : rm;
-      });
-      const nextPlan = { ...prev, rooms: nextRooms };
-      setTimeout(() => handleStateChange(nextPlan), 0);
-      return nextPlan;
-    });
-  };
+  // -------------------------------------------------------------------------
+  // Dark mode / high contrast
+  //
+  // Tailwind v4's `dark:` variant keys off prefers-color-scheme, so the old
+  // high-contrast mode left dark children inside a light shell. Switching to a
+  // class-based variant (see index.css) lets high contrast force light.
+  // -------------------------------------------------------------------------
+  const [systemPrefersDark, setSystemPrefersDark] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches
+  );
 
-  // Load standard template on startup
   useEffect(() => {
-    const starter = starterPlans.oneBedroom.data;
-    setPlan(starter);
-    setHistory([starter]);
-    setHistoryIndex(0);
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (e: MediaQueryListEvent) => setSystemPrefersDark(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  // Save state change in undo/redo history
-  const handleStateChange = (newPlan?: FloorPlanData) => {
-    const targetPlan = newPlan || plan;
-    const nextHistory = history.slice(0, historyIndex + 1);
-    setHistory([...nextHistory, targetPlan]);
-    setHistoryIndex(nextHistory.length);
-  };
+  useEffect(() => {
+    const root = document.documentElement;
+    // High contrast always wins: it is an accessibility override, and mixing it
+    // with dark-mode child styling defeats the point.
+    root.classList.toggle('dark', systemPrefersDark && !highContrast);
+  }, [systemPrefersDark, highContrast]);
 
-  const handleUpdatePlanDirectly = (updater: FloorPlanData | ((prev: FloorPlanData) => FloorPlanData)) => {
-    setPlan(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      // Schedule history save
-      setTimeout(() => handleStateChange(next), 0);
-      return next;
-    });
-  };
+  // -------------------------------------------------------------------------
+  // Plan mutations
+  // -------------------------------------------------------------------------
 
-  // --- UNDO / REDO ---
-  const handleUndo = () => {
-    if (historyIndex > 0) {
-      const prevIndex = historyIndex - 1;
-      setHistoryIndex(prevIndex);
-      setPlan(history[prevIndex]);
-    }
-  };
+  /** Apply a change without recording an undo step (used during drags). */
+  const updatePlan = useCallback((updater: FloorPlanData | ((prev: FloorPlanData) => FloorPlanData)) => {
+    dispatch(
+      typeof updater === 'function'
+        ? { type: 'update', updater, commit: false }
+        : { type: 'set', plan: updater, commit: false }
+    );
+  }, []);
 
-  const handleRedo = () => {
-    if (historyIndex < history.length - 1) {
-      const nextIndex = historyIndex + 1;
-      setHistoryIndex(nextIndex);
-      setPlan(history[nextIndex]);
-    }
-  };
+  /** Snapshot the current plan into history (call on drag end). */
+  const commitHistory = useCallback(() => dispatch({ type: 'commit' }), []);
 
-  const handleClear = () => {
-    const cleared: FloorPlanData = { walls: [], rooms: [], openings: [], furniture: [] };
-    setPlan(cleared);
+  /** Apply a discrete edit and record one undo step. */
+  const updatePlanAndCommit = useCallback((updater: FloorPlanData | ((prev: FloorPlanData) => FloorPlanData)) => {
+    dispatch(
+      typeof updater === 'function'
+        ? { type: 'update', updater, commit: true }
+        : { type: 'set', plan: updater, commit: true }
+    );
+  }, []);
+
+  /**
+   * Load a plan from an external source (AI variant, starter template, chat
+   * tool call). Always normalized: model output is not a structural guarantee.
+   */
+  const loadPlan = useCallback((incoming: unknown) => {
+    dispatch({ type: 'set', plan: normalizePlan(incoming), commit: true });
     setSelectedElementId(null);
     setSelectedElementType(null);
-    handleStateChange(cleared);
-  };
+  }, []);
 
-  const handleLoadSample = (key: string) => {
+  const handleUndo = useCallback(() => dispatch({ type: 'undo' }), []);
+  const handleRedo = useCallback(() => dispatch({ type: 'redo' }), []);
+
+  const handleClear = useCallback(() => {
+    dispatch({
+      type: 'set',
+      plan: { walls: [], rooms: [], openings: [], furniture: [] },
+      commit: true,
+    });
+    setSelectedElementId(null);
+    setSelectedElementType(null);
+  }, []);
+
+  const handleLoadSample = useCallback((key: string) => {
     const sample = starterPlans[key];
-    if (sample) {
-      setPlan(sample.data);
+    if (!sample) {
+      console.warn(`[LandCraft] Unknown starter plan: ${key}`);
+      return;
+    }
+    loadPlan(sample.data);
+  }, [loadPlan]);
+
+  // Apply auto-labeled room names to plan
+  const handleApplyAutoLabels = useCallback((updatedRooms: { id: string; label: string }[]) => {
+    updatePlanAndCommit((prev) => {
+      const byId = new Map(updatedRooms.map((u) => [u.id, u.label]));
+      return {
+        ...prev,
+        rooms: prev.rooms.map((rm) => (byId.has(rm.id) ? { ...rm, label: byId.get(rm.id)! } : rm)),
+      };
+    });
+  }, [updatePlanAndCommit]);
+
+  // -------------------------------------------------------------------------
+  // Element edits
+  //
+  // Property fields are edited by typing, so each keystroke used to push its
+  // own undo step (and the old code debounced via setTimeout inside an
+  // updater). Collapse a burst of edits into a single history entry.
+  // -------------------------------------------------------------------------
+  const commitTimer = useRef<number | null>(null);
+  const scheduleCommit = useCallback(() => {
+    if (commitTimer.current !== null) window.clearTimeout(commitTimer.current);
+    commitTimer.current = window.setTimeout(() => {
+      commitTimer.current = null;
+      dispatch({ type: 'commit' });
+    }, 500);
+  }, []);
+
+  useEffect(() => () => {
+    if (commitTimer.current !== null) window.clearTimeout(commitTimer.current);
+  }, []);
+
+  const handleUpdateElement = useCallback(
+    (type: 'wall' | 'room' | 'opening' | 'furniture', id: string, updatedData: any) => {
+      updatePlan((prev) => {
+        const next = { ...prev };
+        switch (type) {
+          case 'wall':
+            next.walls = next.walls.map((w) => (w.id === id ? { ...w, ...updatedData } : w));
+            break;
+          case 'room':
+            next.rooms = next.rooms.map((r) => (r.id === id ? { ...r, ...updatedData } : r));
+            break;
+          case 'opening':
+            next.openings = next.openings.map((o) => (o.id === id ? { ...o, ...updatedData } : o));
+            break;
+          case 'furniture':
+            next.furniture = next.furniture.map((f) => (f.id === id ? { ...f, ...updatedData } : f));
+            break;
+        }
+        return next;
+      });
+      scheduleCommit();
+    },
+    [updatePlan, scheduleCommit]
+  );
+
+  const handleDeleteElement = useCallback(
+    (type: 'wall' | 'room' | 'opening' | 'furniture', id: string) => {
+      updatePlanAndCommit((prev) => {
+        const next = { ...prev };
+        switch (type) {
+          case 'wall':
+            next.walls = next.walls.filter((w) => w.id !== id);
+            break;
+          case 'room':
+            next.rooms = next.rooms.filter((r) => r.id !== id);
+            break;
+          case 'opening':
+            next.openings = next.openings.filter((o) => o.id !== id);
+            break;
+          case 'furniture':
+            next.furniture = next.furniture.filter((f) => f.id !== id);
+            break;
+        }
+        // Openings pinned to a removed wall would keep a dangling wallId.
+        if (type === 'wall') {
+          next.openings = next.openings.map((o) => (o.wallId === id ? { ...o, wallId: undefined } : o));
+        }
+        return next;
+      });
       setSelectedElementId(null);
       setSelectedElementType(null);
-      handleStateChange(sample.data);
-    }
-  };
+    },
+    [updatePlanAndCommit]
+  );
 
-  // --- DYNAMIC PLAN STATISTICS ---
-  const getPlanStats = () => {
+  /**
+   * Place a palette preset at the centre of the viewport.
+   *
+   * The old version did `const next = {...prev}; next.rooms.push(...)`, which
+   * mutates the array every history entry aliases -- undo could never restore
+   * prior rooms -- and the id was computed outside the updater, so React's
+   * StrictMode double-invoke created two elements sharing one id. Immutable
+   * spread + id inside the updater fixes both.
+   */
+  const handleInstantAdd = useCallback(
+    (
+      type: 'room' | 'opening' | 'furniture',
+      subType: string,
+      label: string,
+      width?: number,
+      height?: number,
+      extra?: { color?: string; category?: string }
+    ) => {
+      const centerX = Math.round((400 - panX) / zoom);
+      const centerY = Math.round((250 - panY) / zoom);
+
+      updatePlanAndCommit((prev) => {
+        const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const next = { ...prev };
+
+        if (type === 'room') {
+          const w = width || 120;
+          const h = height || 80;
+          next.rooms = [
+            ...prev.rooms,
+            {
+              id,
+              x: centerX - w / 2,
+              y: centerY - h / 2,
+              width: w,
+              height: h,
+              label,
+              color: extra?.color || 'rgba(59, 130, 246, 0.08)',
+            },
+          ];
+        } else if (type === 'opening') {
+          const isWindow = subType === 'standard' || subType === 'large' || subType === 'bay';
+          next.openings = [
+            ...prev.openings,
+            {
+              id,
+              type: isWindow ? 'window' : 'door',
+              subType: subType as any,
+              x: centerX,
+              y: centerY,
+              width: width || 32,
+              rotation: 0,
+              flipSwing: false,
+            },
+          ];
+        } else if (type === 'furniture') {
+          next.furniture = [
+            ...prev.furniture,
+            {
+              id,
+              subType,
+              label,
+              x: centerX,
+              y: centerY,
+              width: width || 40,
+              height: height || 40,
+              rotation: 0,
+              category: (extra?.category as Furniture['category']) || 'living',
+            },
+          ];
+        }
+        return next;
+      });
+    },
+    [updatePlanAndCommit, panX, panY, zoom]
+  );
+
+  const getSelectedElementData = useMemo(() => {
+    if (!selectedElementId || !selectedElementType) return null;
+    switch (selectedElementType) {
+      case 'wall':
+        return plan.walls.find((w) => w.id === selectedElementId) || null;
+      case 'room':
+        return plan.rooms.find((r) => r.id === selectedElementId) || null;
+      case 'opening':
+        return plan.openings.find((o) => o.id === selectedElementId) || null;
+      case 'furniture':
+        return plan.furniture.find((f) => f.id === selectedElementId) || null;
+      default:
+        return null;
+    }
+  }, [plan, selectedElementId, selectedElementType]);
+
+  // -------------------------------------------------------------------------
+  // Statistics
+  // -------------------------------------------------------------------------
+  const stats = useMemo(() => {
     let totalAreaPixels = 0;
-    plan.rooms.forEach(r => {
+    plan.rooms.forEach((r) => {
       totalAreaPixels += r.width * r.height;
     });
-    // Convert to sq meters
-    const totalAreaM2 = totalAreaPixels / 1600; // 40px * 40px = 1600px2 per m2
-    const formattedArea = unit === 'm' 
-      ? `${totalAreaM2.toFixed(1)} m²` 
-      : `${(totalAreaM2 * 10.7639).toFixed(0)} sq ft`;
+    // 40px * 40px = 1600px2 per m2
+    const totalAreaM2 = totalAreaPixels / 1600;
+    const formattedArea =
+      unit === 'm' ? `${totalAreaM2.toFixed(1)} m²` : `${(totalAreaM2 * 10.7639).toFixed(0)} sq ft`;
 
     return {
       area: formattedArea,
       wallsCount: plan.walls.length,
       openingsCount: plan.openings.length,
-      furnitureCount: plan.furniture.length
+      furnitureCount: plan.furniture.length,
     };
-  };
+  }, [plan, unit]);
 
-  const stats = getPlanStats();
-
-  // --- MANUAL EXPORTS ---
-  const handleExportJson = () => {
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(plan, null, 2));
+  // -------------------------------------------------------------------------
+  // Exports
+  // -------------------------------------------------------------------------
+  const handleExportJson = useCallback(() => {
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(plan, null, 2));
     const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `landcraft-plan-${Date.now()}.json`);
+    downloadAnchor.setAttribute('href', dataStr);
+    downloadAnchor.setAttribute('download', `landcraft-plan-${Date.now()}.json`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
-  };
+  }, [plan]);
 
-  const handleExportSvg = () => {
-    const svgElement = document.getElementById('interactive-blueprint-svg');
+  const handleExportSvg = useCallback(() => {
+    const svgElement = document.querySelector<SVGSVGElement>('#interactive-blueprint-svg');
     if (!svgElement) return;
 
-    // Serialize SVG markup to string
     const serializer = new XMLSerializer();
-    let svgString = serializer.serializeToString(svgElement);
-    
-    // Add standard namespace if missing
-    if (!svgString.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
-      svgString = svgString.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
-    }
+    const clone = svgElement.cloneNode(true) as SVGSVGElement;
 
-    const dataStr = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgString);
+    // The live element is sized by CSS (w-full/h-full) and carries the current
+    // pan/zoom transform. Give the export intrinsic dimensions so it opens at a
+    // sane size in a viewer, and a viewBox so it scales.
+    const rect = svgElement.getBoundingClientRect();
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('width', String(Math.max(1, Math.round(rect.width))));
+    clone.setAttribute('height', String(Math.max(1, Math.round(rect.height))));
+    clone.setAttribute('viewBox', `0 0 ${Math.max(1, Math.round(rect.width))} ${Math.max(1, Math.round(rect.height))}`);
+
+    const svgString = serializer.serializeToString(clone);
+    const dataStr = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgString);
     const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `landcraft-blueprint-${Date.now()}.svg`);
+    downloadAnchor.setAttribute('href', dataStr);
+    downloadAnchor.setAttribute('download', `landcraft-blueprint-${Date.now()}.svg`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
-  };
+  }, []);
 
-  // Update properties of a selected element
-  const handleUpdateElement = (type: 'wall' | 'room' | 'opening' | 'furniture', id: string, updatedData: any) => {
-    setPlan(prev => {
-      const next = { ...prev };
-      if (type === 'wall') {
-        next.walls = next.walls.map(w => w.id === id ? { ...w, ...updatedData } : w);
-      } else if (type === 'room') {
-        next.rooms = next.rooms.map(r => r.id === id ? { ...r, ...updatedData } : r);
-      } else if (type === 'opening') {
-        next.openings = next.openings.map(o => o.id === id ? { ...o, ...updatedData } : o);
-      } else if (type === 'furniture') {
-        next.furniture = next.furniture.map(f => f.id === id ? { ...f, ...updatedData } : f);
-      }
-      return next;
-    });
-    // Schedule history push after state finishes batching
-    setTimeout(() => handleStateChange(), 50);
-  };
+  // -------------------------------------------------------------------------
 
-  // Delete element from active collection
-  const handleDeleteElement = (type: 'wall' | 'room' | 'opening' | 'furniture', id: string) => {
-    setPlan(prev => {
-      const next = { ...prev };
-      if (type === 'wall') {
-        next.walls = next.walls.filter(w => w.id !== id);
-      } else if (type === 'room') {
-        next.rooms = next.rooms.filter(r => r.id !== id);
-      } else if (type === 'opening') {
-        next.openings = next.openings.filter(o => o.id !== id);
-      } else if (type === 'furniture') {
-        next.furniture = next.furniture.filter(f => f.id !== id);
-      }
-      return next;
-    });
-    setSelectedElementId(null);
-    setSelectedElementType(null);
-    setTimeout(() => handleStateChange(), 50);
-  };
-
-  // Callback to instantly place custom presets onto the center of the viewport
-  const handleInstantAdd = (type: 'room' | 'opening' | 'furniture', subType: string, label: string, width?: number, height?: number) => {
-    // Drop at center of the active viewport (approximated center or offset pan)
-    const centerX = Math.round((400 - panX) / zoom);
-    const centerY = Math.round((250 - panY) / zoom);
-    const id = `${type}-${Date.now()}`;
-
-    setPlan(prev => {
-      const next = { ...prev };
-      if (type === 'room') {
-        next.rooms.push({
-          id,
-          x: centerX - (width || 120) / 2,
-          y: centerY - (height || 80) / 2,
-          width: width || 120,
-          height: height || 80,
-          label,
-          color: 'rgba(59, 130, 246, 0.08)'
-        });
-      } else if (type === 'opening') {
-        next.openings.push({
-          id,
-          type: subType === 'standard' || subType === 'large' || subType === 'bay' ? 'window' : 'door',
-          subType: subType as any,
-          x: centerX,
-          y: centerY,
-          width: width || 32,
-          rotation: 0,
-          flipSwing: false
-        });
-      } else if (type === 'furniture') {
-        next.furniture.push({
-          id,
-          subType,
-          label,
-          x: centerX,
-          y: centerY,
-          width: width || 40,
-          height: height || 40,
-          rotation: 0,
-          category: 'living'
-        });
-      }
-      return next;
-    });
-
-    setSelectedElementId(id);
-    setSelectedElementType(type);
-    setTimeout(() => handleStateChange(), 50);
-  };
-
-  const getSelectedElementData = () => {
-    if (!selectedElementId || !selectedElementType) return null;
-    if (selectedElementType === 'wall') {
-      return plan.walls.find(w => w.id === selectedElementId) || null;
-    }
-    if (selectedElementType === 'room') {
-      return plan.rooms.find(r => r.id === selectedElementId) || null;
-    }
-    if (selectedElementType === 'opening') {
-      return plan.openings.find(o => o.id === selectedElementId) || null;
-    }
-    if (selectedElementType === 'furniture') {
-      return plan.furniture.find(f => f.id === selectedElementId) || null;
-    }
-    return null;
-  };
-
-  // Accessibility styling overrides
   const mainShellStyle = highContrast
     ? 'bg-white text-black font-sans'
     : 'bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-200 font-sans';
@@ -332,11 +481,11 @@ export default function App() {
   return (
     <div className={`min-h-screen flex flex-col ${mainShellStyle}`} id="landcraft-main-container">
       {/* 1. Header Banner */}
-      <header 
+      <header
         id="landcraft-header"
         className={`px-5 py-3.5 flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b ${
-          highContrast 
-            ? 'bg-white border-black text-black border-b-2' 
+          highContrast
+            ? 'bg-white border-black text-black border-b-2'
             : 'bg-slate-900 border-slate-800 text-white'
         }`}
       >
@@ -346,9 +495,7 @@ export default function App() {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-lg font-black tracking-tight uppercase">
-                LandCraft AI
-              </h1>
+              <h1 className="text-lg font-black tracking-tight uppercase">LandCraft AI</h1>
               <span className="text-[9px] uppercase tracking-wider bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded font-bold">
                 Professional Blueprint Engine
               </span>
@@ -361,19 +508,23 @@ export default function App() {
 
         {/* Dynamic plan status overview counters */}
         <div className="flex flex-wrap items-center gap-4 text-xs">
-          <div className="bg-slate-800/60 dark:bg-slate-950/40 border border-slate-700/50 px-3 py-2 rounded-lg text-[11px] font-mono">
+          <div className="bg-slate-800/60 border border-slate-700/50 px-3 py-2 rounded-lg text-[11px] font-mono">
             <span className="text-slate-400 block uppercase text-[8px] tracking-wider font-semibold">Total Area</span>
             <span className="font-bold text-slate-100 text-xs">{stats.area}</span>
           </div>
-          <div className="bg-slate-800/60 dark:bg-slate-950/40 border border-slate-700/50 px-3 py-2 rounded-lg text-[11px] font-mono">
-            <span className="text-slate-400 block uppercase text-[8px] tracking-wider font-semibold">Structural Walls</span>
+          <div className="bg-slate-800/60 border border-slate-700/50 px-3 py-2 rounded-lg text-[11px] font-mono">
+            <span className="text-slate-400 block uppercase text-[8px] tracking-wider font-semibold">
+              Structural Walls
+            </span>
             <span className="font-bold text-slate-100 text-xs">{stats.wallsCount}</span>
           </div>
-          <div className="bg-slate-800/60 dark:bg-slate-950/40 border border-slate-700/50 px-3 py-2 rounded-lg text-[11px] font-mono">
-            <span className="text-slate-400 block uppercase text-[8px] tracking-wider font-semibold">Openings (Doors/Win)</span>
+          <div className="bg-slate-800/60 border border-slate-700/50 px-3 py-2 rounded-lg text-[11px] font-mono">
+            <span className="text-slate-400 block uppercase text-[8px] tracking-wider font-semibold">
+              Openings (Doors/Win)
+            </span>
             <span className="font-bold text-slate-100 text-xs">{stats.openingsCount}</span>
           </div>
-          <div className="bg-slate-800/60 dark:bg-slate-950/40 border border-slate-700/50 px-3 py-2 rounded-lg text-[11px] font-mono">
+          <div className="bg-slate-800/60 border border-slate-700/50 px-3 py-2 rounded-lg text-[11px] font-mono">
             <span className="text-slate-400 block uppercase text-[8px] tracking-wider font-semibold">Furniture</span>
             <span className="font-bold text-slate-100 text-xs">{stats.furnitureCount}</span>
           </div>
@@ -382,7 +533,6 @@ export default function App() {
 
       {/* 2. Primary Layout Editor Body */}
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
-        {/* Left sidebar - Component elements catalog */}
         {isLeftSidebarOpen && (
           <SidebarPalette
             activeTool={activeTool}
@@ -402,8 +552,8 @@ export default function App() {
             id="open-left-sidebar-tab"
             onClick={() => setIsLeftSidebarOpen(true)}
             className={`absolute left-0 top-16 z-30 flex items-center gap-1.5 px-2.5 py-2 rounded-r-xl border shadow-xl backdrop-blur-md transition-all cursor-pointer hover:translate-x-1 ${
-              highContrast 
-                ? 'bg-white border-2 border-black text-black font-bold' 
+              highContrast
+                ? 'bg-white border-2 border-black text-black font-bold'
                 : 'bg-slate-900/95 hover:bg-slate-800 text-slate-200 border-slate-700/80 hover:border-emerald-500 shadow-emerald-950/20'
             }`}
             title="Show Left Sidebar (Catalog & Tools)"
@@ -422,12 +572,12 @@ export default function App() {
             setSnapToGrid={setSnapToGrid}
             snapToElements={snapToElements}
             setSnapToElements={setSnapToElements}
-            showWallLabels={showWallLabels}
-            setShowWallLabels={handleToggleWallLabels}
+            showWallLabels={layerVisibility.wallLabels}
+            setShowWallLabels={toggleWallLabels}
             highContrast={highContrast}
             setHighContrast={setHighContrast}
-            canUndo={historyIndex > 0}
-            canRedo={historyIndex < history.length - 1}
+            canUndo={index > 0}
+            canRedo={index < entries.length - 1}
             onUndo={handleUndo}
             onRedo={handleRedo}
             onClear={handleClear}
@@ -438,9 +588,9 @@ export default function App() {
             onOpenEstimator={() => setIsEstimatorOpen(true)}
             onOpenAutoLabeler={() => setIsAutoLabelModalOpen(true)}
             isLeftSidebarOpen={isLeftSidebarOpen}
-            onToggleLeftSidebar={() => setIsLeftSidebarOpen(prev => !prev)}
+            onToggleLeftSidebar={() => setIsLeftSidebarOpen((prev) => !prev)}
             isRightSidebarOpen={isRightSidebarOpen}
-            onToggleRightSidebar={() => setIsRightSidebarOpen(prev => !prev)}
+            onToggleRightSidebar={() => setIsRightSidebarOpen((prev) => !prev)}
             zoom={zoom}
             setZoom={setZoom}
           />
@@ -448,7 +598,7 @@ export default function App() {
           {/* Interactive Blueprint drafting board */}
           <FloorPlanCanvas
             plan={plan}
-            setPlan={handleUpdatePlanDirectly}
+            setPlan={updatePlan}
             selectedElementId={selectedElementId}
             selectedElementType={selectedElementType}
             setSelectedElementId={setSelectedElementId}
@@ -466,12 +616,11 @@ export default function App() {
             unit={unit}
             snapToGrid={snapToGrid}
             snapToElements={snapToElements}
-            gridSize={20} // Standard grid spacing
+            gridSize={20}
             highContrast={highContrast}
             layerVisibility={layerVisibility}
-            showWallLabels={showWallLabels}
-            setShowWallLabels={handleToggleWallLabels}
-            onStateChange={handleStateChange}
+            onToggleWallLabels={toggleWallLabels}
+            onStateChange={commitHistory}
           />
 
           {/* Dynamic AI continuous diagnostic review board */}
@@ -479,14 +628,14 @@ export default function App() {
             plan={plan}
             unit={unit}
             highContrast={highContrast}
-            onLoadPlan={handleUpdatePlanDirectly}
+            onLoadPlan={loadPlan}
           />
         </div>
 
         {/* Right side drawer - Properties inspector and layout sheets */}
         {isRightSidebarOpen && (
           <PropertyInspector
-            selectedElement={getSelectedElementData()}
+            selectedElement={getSelectedElementData}
             selectedType={selectedElementType}
             onUpdateElement={handleUpdateElement}
             onDeleteElement={handleDeleteElement}
@@ -494,8 +643,7 @@ export default function App() {
             highContrast={highContrast}
             layerVisibility={layerVisibility}
             setLayerVisibility={setLayerVisibility}
-            showWallLabels={showWallLabels}
-            setShowWallLabels={handleToggleWallLabels}
+            onToggleWallLabels={toggleWallLabels}
             furnitureList={plan.furniture}
             onOpenAutoLabeler={() => setIsAutoLabelModalOpen(true)}
             isOpen={isRightSidebarOpen}
@@ -509,8 +657,8 @@ export default function App() {
             id="open-right-sidebar-tab"
             onClick={() => setIsRightSidebarOpen(true)}
             className={`absolute right-0 top-16 z-30 flex items-center gap-1.5 px-2.5 py-2 rounded-l-xl border shadow-xl backdrop-blur-md transition-all cursor-pointer hover:-translate-x-1 ${
-              highContrast 
-                ? 'bg-white border-2 border-black text-black font-bold' 
+              highContrast
+                ? 'bg-white border-2 border-black text-black font-bold'
                 : 'bg-slate-900/95 hover:bg-slate-800 text-slate-200 border-slate-700/80 hover:border-emerald-500 shadow-emerald-950/20'
             }`}
             title="Show Right Sidebar (Properties & Layers)"
@@ -535,9 +683,26 @@ export default function App() {
         />
       )}
 
-      {/* AR Viewer Overlay */}
+      {/* AR Viewer Overlay -- lazily loaded */}
       {isARViewerOpen && (
-        <ARViewer plan={plan} onClose={() => setIsARViewerOpen(false)} />
+        <ErrorBoundary
+          fallback={
+            <div className="fixed inset-0 z-[100] bg-black/80 text-white flex items-center justify-center p-6 text-sm">
+              The 3D viewer could not start. Your 2D plan is unaffected — close this to continue.
+            </div>
+          }
+        >
+          <Suspense
+            fallback={
+              <div className="fixed inset-0 z-[100] bg-black text-white flex flex-col items-center justify-center gap-3">
+                <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+                <span className="text-xs text-slate-400">Loading 3D viewer…</span>
+              </div>
+            }
+          >
+            <ARViewer plan={plan} onClose={() => setIsARViewerOpen(false)} />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {/* Cost Estimator Overlay */}
@@ -547,20 +712,33 @@ export default function App() {
 
       {/* AI Architect Chat */}
       {isChatOpen ? (
-        <ArchitectChatPanel 
-           plan={plan} 
-           onClose={() => setIsChatOpen(false)} 
-           onUpdatePlan={handleUpdatePlanDirectly}
-        />
+        <ArchitectChatPanel plan={plan} onClose={() => setIsChatOpen(false)} onUpdatePlan={loadPlan} />
       ) : (
         <div className="fixed bottom-6 right-6 z-[90]">
-           <button 
-             onClick={() => setIsChatOpen(true)}
-             className="w-14 h-14 bg-blue-600 hover:bg-blue-500 text-white rounded-full flex items-center justify-center shadow-2xl transition-transform hover:scale-105"
-             title="Open AI Architect Chat"
-           >
-             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
-           </button>
+          <button
+            onClick={() => setIsChatOpen(true)}
+            className="w-14 h-14 bg-blue-600 hover:bg-blue-500 text-white rounded-full flex items-center justify-center shadow-2xl transition-transform hover:scale-105"
+            title="Open AI Architect Chat"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M12 8V4H8" />
+              <rect width="16" height="12" x="4" y="8" rx="2" />
+              <path d="M2 14h2" />
+              <path d="M20 14h2" />
+              <path d="M15 13v2" />
+              <path d="M9 13v2" />
+            </svg>
+          </button>
         </div>
       )}
     </div>
