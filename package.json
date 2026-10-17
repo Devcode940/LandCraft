@@ -32,6 +32,9 @@
     "@react-three/xr": "^6.6.30",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.1.14",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
     "@types/compression": "^1.8.1",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
@@ -60,7 +63,7 @@
     "vite": "^6.2.3",
     "vitest": "^5.0.5"
   },
-  "description": "LandCraft AI \u2014 from land photo to dream home: an AI-assisted architectural floor plan editor.",
+  "description": "LandCraft AI — from land photo to dream home: an AI-assisted architectural floor plan editor.",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22"

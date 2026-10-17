@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { Sparkles, X, Check, ArrowRight, Tv, Bed, Bath, Utensils, Square, AlertCircle } from 'lucide-react';
 import { FloorPlanData, DimensionUnit } from '../types';
 import { suggestAllRooms, RoomSuggestion } from '../utils/roomAutoLabeler';
+import Modal from './Modal';
 
 interface AutoLabelRoomsModalProps {
   plan: FloorPlanData;
@@ -95,11 +96,13 @@ export default function AutoLabelRoomsModal({
   const selectedCount = Object.values(checkedRoomIds).filter(Boolean).length;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
-      <div
-        className={`w-full max-w-2xl rounded-2xl overflow-hidden flex flex-col max-h-[85vh] ${modalBg}`}
-        id="auto-label-rooms-modal"
-      >
+    <Modal
+      label="Auto-label room names"
+      onClose={onClose}
+      overlayClassName="bg-slate-950/70 backdrop-blur-xs"
+      className={`w-full max-w-2xl rounded-2xl overflow-hidden flex flex-col max-h-[85vh] ${modalBg}`}
+    >
+      <div className="flex min-h-0 flex-1 flex-col" id="auto-label-rooms-modal">
         {/* Modal Header */}
         <div
           className={`p-4 sm:p-5 flex items-center justify-between border-b ${
@@ -319,6 +322,6 @@ export default function AutoLabelRoomsModal({
           </div>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
