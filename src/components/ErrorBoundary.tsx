@@ -14,6 +14,11 @@ interface Props {
   children: React.ReactNode;
   /** Shown instead of the default card, if you want a lighter treatment. */
   fallback?: React.ReactNode;
+  /**
+   * 'screen' (default) fills the viewport for a top-level failure; 'panel'
+   * renders a compact card so one broken panel does not blank the canvas.
+   */
+  variant?: 'screen' | 'panel';
 }
 
 interface State {
@@ -40,6 +45,26 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     if (!error) return this.props.children;
     if (this.props.fallback) return this.props.fallback;
 
+    if (this.props.variant === 'panel') {
+      return (
+        <div className="p-4 m-2 rounded-xl border border-red-900/50 bg-red-950/30 text-red-200 text-xs">
+          <div className="flex items-center gap-2 font-bold mb-1">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            This panel failed to render
+          </div>
+          <p className="text-red-300/80 leading-relaxed">
+            The rest of the editor is unaffected. Reload to bring it back.
+          </p>
+          <button
+            onClick={this.handleReload}
+            className="mt-2 px-2.5 py-1 bg-red-900/50 hover:bg-red-900/70 rounded text-[11px] font-semibold transition-colors cursor-pointer"
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-slate-950 text-slate-200 flex items-center justify-center p-6">
         <div className="max-w-lg w-full bg-slate-900 border border-red-900/50 rounded-2xl p-6 shadow-2xl">
@@ -48,8 +73,8 @@ export default class ErrorBoundary extends React.Component<Props, State> {
             <h1 className="text-base font-bold">Something went wrong</h1>
           </div>
           <p className="text-xs text-slate-400 leading-relaxed mb-4">
-            LandCraft hit an unexpected error while drawing the editor. Your plan may not be saved — if you
-            have an exported JSON copy, you can reload and re-open it.
+            LandCraft hit an unexpected error while running the editor. Your drawing is autosaved locally and
+            will be restored when you reload. If you have an exported JSON copy, that is a safer fallback.
           </p>
           <pre className="text-[10px] font-mono bg-slate-950 border border-slate-800 rounded-lg p-3 overflow-auto max-h-40 text-slate-500 whitespace-pre-wrap">
             {error.message}

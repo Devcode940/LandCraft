@@ -698,26 +698,31 @@ export default function App() {
             onStateChange={commitHistory}
           />
 
-          {/* Dynamic AI continuous diagnostic review board */}
-          <AiAssistantPanel plan={plan} unit={unit} highContrast={highContrast} onLoadPlan={loadPlan} />
+          {/* Dynamic AI continuous diagnostic review board. Isolated: it
+              renders parsed model output, the most likely thing to throw. */}
+          <ErrorBoundary variant="panel">
+            <AiAssistantPanel plan={plan} unit={unit} highContrast={highContrast} onLoadPlan={loadPlan} />
+          </ErrorBoundary>
         </div>
 
         {/* Right side drawer - Properties inspector and layout sheets */}
         {isRightSidebarOpen && (
-          <PropertyInspector
-            selectedElement={getSelectedElementData}
-            selectedType={selectedElementType}
-            onUpdateElement={handleUpdateElement}
-            onDeleteElement={handleDeleteElement}
-            unit={unit}
-            highContrast={highContrast}
-            layerVisibility={layerVisibility}
-            setLayerVisibility={setLayerVisibility}
-            onToggleWallLabels={toggleWallLabels}
-            furnitureList={plan.furniture}
-            onOpenAutoLabeler={() => setIsAutoLabelModalOpen(true)}
-            onToggle={() => setIsRightSidebarOpen(false)}
-          />
+          <ErrorBoundary variant="panel">
+            <PropertyInspector
+              selectedElement={getSelectedElementData}
+              selectedType={selectedElementType}
+              onUpdateElement={handleUpdateElement}
+              onDeleteElement={handleDeleteElement}
+              unit={unit}
+              highContrast={highContrast}
+              layerVisibility={layerVisibility}
+              setLayerVisibility={setLayerVisibility}
+              onToggleWallLabels={toggleWallLabels}
+              furnitureList={plan.furniture}
+              onOpenAutoLabeler={() => setIsAutoLabelModalOpen(true)}
+              onToggle={() => setIsRightSidebarOpen(false)}
+            />
+          </ErrorBoundary>
         )}
 
         {/* Floating edge tab to reopen right sidebar when collapsed */}
