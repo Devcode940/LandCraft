@@ -5,11 +5,29 @@
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Sparkles, PanelLeftOpen, PanelRightOpen, Loader2, AlertTriangle, X } from 'lucide-react';
-import { FloorPlanData, ToolType, DimensionUnit, LayerVisibility, Furniture, Opening } from './types';
+import {
+  FloorPlanData,
+  ToolType,
+  DimensionUnit,
+  LayerVisibility,
+  Furniture,
+  Opening,
+  PaletteItem,
+  Wall,
+  Room,
+} from './types';
 import { starterPlans } from './utils/sampleData';
 import { normalizePlan } from './utils/normalizePlan';
 import { editorReducer, initEditorState, type EditorState } from './lib/editorState';
-import { addElement, deleteElement, emptyPlan, findElement, makeId, updateElement } from './lib/planOps';
+import {
+  addElement,
+  deleteElement,
+  emptyPlan,
+  findElement,
+  makeId,
+  updateElement,
+  type ElementType,
+} from './lib/planOps';
 import { clearStoredPlan, loadPlanLocally, parsePlanFile, savePlanLocally } from './lib/persistence';
 import { downloadBlob } from './lib/download';
 
@@ -52,9 +70,11 @@ export default function App() {
   const { plan, entries, index } = state;
 
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
-  const [selectedElementType, setSelectedElementType] = useState<'wall' | 'room' | 'opening' | 'furniture' | null>(null);
+  const [selectedElementType, setSelectedElementType] = useState<
+    'wall' | 'room' | 'opening' | 'furniture' | null
+  >(null);
   const [activeTool, setActiveTool] = useState<ToolType>('select');
-  const [selectedPaletteItem, setSelectedPaletteItem] = useState<any | null>(null);
+  const [selectedPaletteItem, setSelectedPaletteItem] = useState<PaletteItem | null>(null);
 
   // Viewport Settings
   const [zoom, setZoom] = useState(1.0);
@@ -99,7 +119,7 @@ export default function App() {
   // class-based variant (see index.css) lets high contrast force light.
   // -------------------------------------------------------------------------
   const [systemPrefersDark, setSystemPrefersDark] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches
+    () => typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches,
   );
 
   useEffect(() => {
@@ -126,7 +146,7 @@ export default function App() {
     dispatch(
       typeof updater === 'function'
         ? { type: 'update', updater, commit: false }
-        : { type: 'set', plan: updater, commit: false }
+        : { type: 'set', plan: updater, commit: false },
     );
   }, []);
 
@@ -134,13 +154,16 @@ export default function App() {
   const commitHistory = useCallback(() => dispatch({ type: 'commit' }), []);
 
   /** Apply a discrete edit and record one undo step. */
-  const updatePlanAndCommit = useCallback((updater: FloorPlanData | ((prev: FloorPlanData) => FloorPlanData)) => {
-    dispatch(
-      typeof updater === 'function'
-        ? { type: 'update', updater, commit: true }
-        : { type: 'set', plan: updater, commit: true }
-    );
-  }, []);
+  const updatePlanAndCommit = useCallback(
+    (updater: FloorPlanData | ((prev: FloorPlanData) => FloorPlanData)) => {
+      dispatch(
+        typeof updater === 'function'
+          ? { type: 'update', updater, commit: true }
+          : { type: 'set', plan: updater, commit: true },
+      );
+    },
+    [],
+  );
 
   /**
    * Load a plan from an external source (AI variant, starter template, chat
@@ -164,25 +187,31 @@ export default function App() {
     setSelectedElementType(null);
   }, []);
 
-  const handleLoadSample = useCallback((key: string) => {
-    const sample = starterPlans[key];
-    if (!sample) {
-      console.warn(`[LandCraft] Unknown starter plan: ${key}`);
-      return;
-    }
-    loadPlan(sample.data);
-  }, [loadPlan]);
+  const handleLoadSample = useCallback(
+    (key: string) => {
+      const sample = starterPlans[key];
+      if (!sample) {
+        console.warn(`[LandCraft] Unknown starter plan: ${key}`);
+        return;
+      }
+      loadPlan(sample.data);
+    },
+    [loadPlan],
+  );
 
   // Apply auto-labeled room names to plan
-  const handleApplyAutoLabels = useCallback((updatedRooms: { id: string; label: string }[]) => {
-    updatePlanAndCommit((prev) => {
-      const byId = new Map(updatedRooms.map((u) => [u.id, u.label]));
-      return {
-        ...prev,
-        rooms: prev.rooms.map((rm) => (byId.has(rm.id) ? { ...rm, label: byId.get(rm.id)! } : rm)),
-      };
-    });
-  }, [updatePlanAndCommit]);
+  const handleApplyAutoLabels = useCallback(
+    (updatedRooms: { id: string; label: string }[]) => {
+      updatePlanAndCommit((prev) => {
+        const byId = new Map(updatedRooms.map((u) => [u.id, u.label]));
+        return {
+          ...prev,
+          rooms: prev.rooms.map((rm) => (byId.has(rm.id) ? { ...rm, label: byId.get(rm.id)! } : rm)),
+        };
+      });
+    },
+    [updatePlanAndCommit],
+  );
 
   // -------------------------------------------------------------------------
   // Element edits
@@ -200,18 +229,21 @@ export default function App() {
     }, 500);
   }, []);
 
-  useEffect(() => () => {
-    if (commitTimer.current !== null) window.clearTimeout(commitTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (commitTimer.current !== null) window.clearTimeout(commitTimer.current);
+    },
+    [],
+  );
 
   const handleUpdateElement = useCallback(
-    (type: 'wall' | 'room' | 'opening' | 'furniture', id: string, updatedData: any) => {
+    (type: ElementType, id: string, updatedData: Partial<Wall & Room & Opening & Furniture>) => {
       updatePlan((prev) => updateElement(prev, type, id, updatedData));
       // Inspector fields fire on every keystroke/slider tick; collapse the
       // burst into one undo step once typing settles.
       scheduleCommit();
     },
-    [updatePlan, scheduleCommit]
+    [updatePlan, scheduleCommit],
   );
 
   const handleDeleteElement = useCallback(
@@ -220,7 +252,7 @@ export default function App() {
       setSelectedElementId(null);
       setSelectedElementType(null);
     },
-    [updatePlanAndCommit]
+    [updatePlanAndCommit],
   );
 
   /**
@@ -239,7 +271,7 @@ export default function App() {
       label: string,
       width?: number,
       height?: number,
-      extra?: { color?: string; category?: string }
+      extra?: { color?: string; category?: string },
     ) => {
       const centerX = Math.round((400 - panX) / zoom);
       const centerY = Math.round((250 - panY) / zoom);
@@ -294,7 +326,7 @@ export default function App() {
         return prev;
       });
     },
-    [updatePlanAndCommit, panX, panY, zoom]
+    [updatePlanAndCommit, panX, panY, zoom],
   );
 
   const getSelectedElementData = useMemo(() => {
@@ -464,22 +496,19 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [importError]);
 
-  const handleImportJson = useCallback(
-    async (file: File) => {
-      setImportError(null);
-      try {
-        const parsed = parsePlanFile(await file.text());
-        dispatch({ type: 'set', plan: parsed, commit: true });
-        setSelectedElementId(null);
-        setSelectedElementType(null);
-      } catch (error) {
-        // parsePlanFile throws user-facing messages; never leak a stack trace
-        // into the UI for what is almost always a wrong-file mistake.
-        setImportError(error instanceof Error ? error.message : 'That file could not be read.');
-      }
-    },
-    []
-  );
+  const handleImportJson = useCallback(async (file: File) => {
+    setImportError(null);
+    try {
+      const parsed = parsePlanFile(await file.text());
+      dispatch({ type: 'set', plan: parsed, commit: true });
+      setSelectedElementId(null);
+      setSelectedElementType(null);
+    } catch (error) {
+      // parsePlanFile throws user-facing messages; never leak a stack trace
+      // into the UI for what is almost always a wrong-file mistake.
+      setImportError(error instanceof Error ? error.message : 'That file could not be read.');
+    }
+  }, []);
 
   // -------------------------------------------------------------------------
   // Exports
@@ -502,12 +531,15 @@ export default function App() {
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     clone.setAttribute('width', String(Math.max(1, Math.round(rect.width))));
     clone.setAttribute('height', String(Math.max(1, Math.round(rect.height))));
-    clone.setAttribute('viewBox', `0 0 ${Math.max(1, Math.round(rect.width))} ${Math.max(1, Math.round(rect.height))}`);
+    clone.setAttribute(
+      'viewBox',
+      `0 0 ${Math.max(1, Math.round(rect.width))} ${Math.max(1, Math.round(rect.height))}`,
+    );
 
     downloadBlob(
       `landcraft-blueprint-${Date.now()}.svg`,
       serializer.serializeToString(clone),
-      'image/svg+xml'
+      'image/svg+xml',
     );
   }, []);
 
@@ -548,7 +580,9 @@ export default function App() {
         {/* Dynamic plan status overview counters */}
         <div className="flex flex-wrap items-center gap-4 text-xs">
           <div className="bg-slate-800/60 border border-slate-700/50 px-3 py-2 rounded-lg text-[11px] font-mono">
-            <span className="text-slate-400 block uppercase text-[8px] tracking-wider font-semibold">Total Area</span>
+            <span className="text-slate-400 block uppercase text-[8px] tracking-wider font-semibold">
+              Total Area
+            </span>
             <span className="font-bold text-slate-100 text-xs">{stats.area}</span>
           </div>
           <div className="bg-slate-800/60 border border-slate-700/50 px-3 py-2 rounded-lg text-[11px] font-mono">
@@ -564,7 +598,9 @@ export default function App() {
             <span className="font-bold text-slate-100 text-xs">{stats.openingsCount}</span>
           </div>
           <div className="bg-slate-800/60 border border-slate-700/50 px-3 py-2 rounded-lg text-[11px] font-mono">
-            <span className="text-slate-400 block uppercase text-[8px] tracking-wider font-semibold">Furniture</span>
+            <span className="text-slate-400 block uppercase text-[8px] tracking-wider font-semibold">
+              Furniture
+            </span>
             <span className="font-bold text-slate-100 text-xs">{stats.furnitureCount}</span>
           </div>
         </div>
@@ -663,12 +699,7 @@ export default function App() {
           />
 
           {/* Dynamic AI continuous diagnostic review board */}
-          <AiAssistantPanel
-            plan={plan}
-            unit={unit}
-            highContrast={highContrast}
-            onLoadPlan={loadPlan}
-          />
+          <AiAssistantPanel plan={plan} unit={unit} highContrast={highContrast} onLoadPlan={loadPlan} />
         </div>
 
         {/* Right side drawer - Properties inspector and layout sheets */}
@@ -766,9 +797,7 @@ export default function App() {
       )}
 
       {/* Cost Estimator Overlay */}
-      {isEstimatorOpen && (
-        <CostEstimatorPanel plan={plan} onClose={() => setIsEstimatorOpen(false)} />
-      )}
+      {isEstimatorOpen && <CostEstimatorPanel plan={plan} onClose={() => setIsEstimatorOpen(false)} />}
 
       {/* AI Architect Chat */}
       {isChatOpen ? (

@@ -13,6 +13,7 @@ import {
   FloorPlanData,
   Point,
   ToolType,
+  PaletteItem,
   DimensionUnit,
   LayerVisibility,
   MeasurementTape,
@@ -37,8 +38,8 @@ interface FloorPlanCanvasProps {
   setSelectedElementType: (t: 'wall' | 'room' | 'opening' | 'furniture' | null) => void;
   activeTool: ToolType;
   setActiveTool: (tool: ToolType) => void;
-  selectedPaletteItem: any | null;
-  setSelectedPaletteItem: (item: any | null) => void;
+  selectedPaletteItem: PaletteItem | null;
+  setSelectedPaletteItem: (item: PaletteItem | null) => void;
   zoom: number;
   setZoom: React.Dispatch<React.SetStateAction<number>>;
   panX: number;
@@ -235,7 +236,7 @@ export default function FloorPlanCanvas({
             // Offset-aware now: previously furniture snapped its centre to the
             // cursor the moment a drag began, unlike rooms.
             next.furniture = prev.furniture.map((fn) =>
-              fn.id === id ? { ...fn, x: snapped.x - drag.offset.x, y: snapped.y - drag.offset.y } : fn
+              fn.id === id ? { ...fn, x: snapped.x - drag.offset.x, y: snapped.y - drag.offset.y } : fn,
             );
             break;
 
@@ -251,7 +252,7 @@ export default function FloorPlanCanvas({
                     wallId: snapRes.wallId,
                     wallOffset: snapRes.offset,
                   }
-                : op
+                : op,
             );
             break;
           }
@@ -295,7 +296,10 @@ export default function FloorPlanCanvas({
         setMeasureDraft((draft) => {
           // Discard accidental clicks: a tape shorter than a few pixels is a
           // mis-click, not a measurement.
-          if (draft && getDistance({ x: draft.x1, y: draft.y1 }, { x: draft.x2, y: draft.y2 }) >= MIN_MEASURE_PX) {
+          if (
+            draft &&
+            getDistance({ x: draft.x1, y: draft.y1 }, { x: draft.x2, y: draft.y2 }) >= MIN_MEASURE_PX
+          ) {
             setMeasurements((prev) => [...prev, { ...draft, id: `m-${prev.length}-${Date.now()}` }]);
           }
           return null;
@@ -483,7 +487,7 @@ export default function FloorPlanCanvas({
   const handleElementMouseDown = (
     e: React.MouseEvent,
     type: 'wall' | 'room' | 'opening' | 'furniture',
-    id: string
+    id: string,
   ) => {
     e.stopPropagation();
     if (e.button !== 0) return;
@@ -596,7 +600,10 @@ export default function FloorPlanCanvas({
         <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
           <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block animate-pulse" />
           <span>
-            Active Mode: <strong className="font-semibold uppercase text-emerald-600 dark:text-emerald-400">{activeTool}</strong>
+            Active Mode:{' '}
+            <strong className="font-semibold uppercase text-emerald-600 dark:text-emerald-400">
+              {activeTool}
+            </strong>
           </span>
         </div>
         <p className="text-slate-400">
@@ -651,7 +658,9 @@ export default function FloorPlanCanvas({
               : 'Show real-time wall length & width labels on canvas'
           }
         >
-          <Ruler className={`w-3.5 h-3.5 ${effectiveShowWallLabels ? 'text-emerald-400' : 'text-slate-400'}`} />
+          <Ruler
+            className={`w-3.5 h-3.5 ${effectiveShowWallLabels ? 'text-emerald-400' : 'text-slate-400'}`}
+          />
           <span className="font-medium">Wall L×W Labels</span>
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold uppercase transition-colors ${
@@ -681,7 +690,12 @@ export default function FloorPlanCanvas({
             <line x1="0" y1="0" x2={gridSize} y2="0" stroke={gridLineColor} strokeWidth="1" />
             <line x1="0" y1="0" x2="0" y2={gridSize} stroke={gridLineColor} strokeWidth="1" />
           </pattern>
-          <pattern id="grid-pattern-major" width={gridSize * 4} height={gridSize * 4} patternUnits="userSpaceOnUse">
+          <pattern
+            id="grid-pattern-major"
+            width={gridSize * 4}
+            height={gridSize * 4}
+            patternUnits="userSpaceOnUse"
+          >
             <rect width={gridSize * 4} height={gridSize * 4} fill="url(#grid-pattern-minor)" />
             <line x1="0" y1="0" x2={gridSize * 4} y2="0" stroke={gridMajorColor} strokeWidth="1.5" />
             <line x1="0" y1="0" x2="0" y2={gridSize * 4} stroke={gridMajorColor} strokeWidth="1.5" />
@@ -743,7 +757,9 @@ export default function FloorPlanCanvas({
                       const metersX = room.width / 40;
                       const metersY = room.height / 40;
                       const areaM2 = metersX * metersY;
-                      return unit === 'm' ? `${areaM2.toFixed(1)} m²` : `${(areaM2 * 10.7639).toFixed(0)} sq ft`;
+                      return unit === 'm'
+                        ? `${areaM2.toFixed(1)} m²`
+                        : `${(areaM2 * 10.7639).toFixed(0)} sq ft`;
                     })()}
                   </text>
 
@@ -762,7 +778,7 @@ export default function FloorPlanCanvas({
                             setPlan((prev) => ({
                               ...prev,
                               rooms: prev.rooms.map((r) =>
-                                r.id === room.id ? { ...r, label: suggestion.suggestedName } : r
+                                r.id === room.id ? { ...r, label: suggestion.suggestedName } : r,
                               ),
                             }));
                             onStateChange();
@@ -828,104 +844,102 @@ export default function FloorPlanCanvas({
                   />
 
                   {/* Real-time Length and Width labels on wall segments */}
-                  {effectiveShowWallLabels ? (
-                    (() => {
-                      const len = getDistance({ x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 });
-                      const { lengthStr, widthStr } = formatWallDimensions(len, wall.thickness, unit);
+                  {effectiveShowWallLabels
+                    ? (() => {
+                        const len = getDistance({ x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 });
+                        const { lengthStr, widthStr } = formatWallDimensions(len, wall.thickness, unit);
 
-                      const midX = (wall.x1 + wall.x2) / 2;
-                      const midY = (wall.y1 + wall.y2) / 2;
-                      const dx = wall.x2 - wall.x1;
-                      const dy = wall.y2 - wall.y1;
-                      const angleRad = Math.atan2(dy, dx);
-                      let angleDeg = (angleRad * 180) / Math.PI;
+                        const midX = (wall.x1 + wall.x2) / 2;
+                        const midY = (wall.y1 + wall.y2) / 2;
+                        const dx = wall.x2 - wall.x1;
+                        const dy = wall.y2 - wall.y1;
+                        const angleRad = Math.atan2(dy, dx);
+                        let angleDeg = (angleRad * 180) / Math.PI;
 
-                      let normalSign = 1;
-                      if (angleDeg > 90) {
-                        angleDeg -= 180;
-                        normalSign = -1;
-                      } else if (angleDeg < -90) {
-                        angleDeg += 180;
-                        normalSign = -1;
-                      }
+                        let normalSign = 1;
+                        if (angleDeg > 90) {
+                          angleDeg -= 180;
+                          normalSign = -1;
+                        } else if (angleDeg < -90) {
+                          angleDeg += 180;
+                          normalSign = -1;
+                        }
 
-                      const nx = -Math.sin(angleRad) * normalSign;
-                      const ny = Math.cos(angleRad) * normalSign;
-                      const offsetDist = Math.max(16, wall.thickness / 2 + 13);
-                      const labelX = midX + nx * offsetDist;
-                      const labelY = midY + ny * offsetDist;
+                        const nx = -Math.sin(angleRad) * normalSign;
+                        const ny = Math.cos(angleRad) * normalSign;
+                        const offsetDist = Math.max(16, wall.thickness / 2 + 13);
+                        const labelX = midX + nx * offsetDist;
+                        const labelY = midY + ny * offsetDist;
 
-                      return (
-                        <g className="pointer-events-none select-none" id={`wall-lw-label-${wall.id}`}>
-                          <line
-                            x1={midX}
-                            y1={midY}
-                            x2={labelX}
-                            y2={labelY}
-                            stroke={highContrast ? '#000000' : isSelected ? '#10b981' : '#64748b'}
-                            strokeWidth="0.75"
-                            strokeDasharray="2 2"
-                            opacity="0.7"
-                          />
-                          <g transform={`translate(${labelX}, ${labelY}) rotate(${angleDeg})`}>
-                            <rect
-                              x="-48"
-                              y="-10"
-                              width="96"
-                              height="20"
-                              rx="4"
-                              fill={highContrast ? '#ffffff' : '#0f172a'}
-                              stroke={highContrast ? '#000000' : isSelected ? '#10b981' : '#334155'}
-                              strokeWidth={highContrast ? '1.5' : isSelected ? '1.5' : '1'}
-                              opacity="0.96"
-                              className="filter drop-shadow-sm"
+                        return (
+                          <g className="pointer-events-none select-none" id={`wall-lw-label-${wall.id}`}>
+                            <line
+                              x1={midX}
+                              y1={midY}
+                              x2={labelX}
+                              y2={labelY}
+                              stroke={highContrast ? '#000000' : isSelected ? '#10b981' : '#64748b'}
+                              strokeWidth="0.75"
+                              strokeDasharray="2 2"
+                              opacity="0.7"
                             />
-                            <text
-                              x="0"
-                              y="3.5"
-                              textAnchor="middle"
-                              className="font-mono text-[8.5px] font-bold select-none tracking-tight"
-                            >
-                              <tspan fill={highContrast ? '#000000' : '#34d399'} fontWeight="800">
-                                L:{' '}
-                              </tspan>
-                              <tspan fill={highContrast ? '#000000' : '#f8fafc'}>{lengthStr}</tspan>
-                              <tspan fill={highContrast ? '#444444' : '#64748b'}> │ </tspan>
-                              <tspan fill={highContrast ? '#000000' : '#38bdf8'} fontWeight="800">
-                                W:{' '}
-                              </tspan>
-                              <tspan fill={highContrast ? '#000000' : '#f8fafc'}>{widthStr}</tspan>
-                            </text>
+                            <g transform={`translate(${labelX}, ${labelY}) rotate(${angleDeg})`}>
+                              <rect
+                                x="-48"
+                                y="-10"
+                                width="96"
+                                height="20"
+                                rx="4"
+                                fill={highContrast ? '#ffffff' : '#0f172a'}
+                                stroke={highContrast ? '#000000' : isSelected ? '#10b981' : '#334155'}
+                                strokeWidth={highContrast ? '1.5' : isSelected ? '1.5' : '1'}
+                                opacity="0.96"
+                                className="filter drop-shadow-sm"
+                              />
+                              <text
+                                x="0"
+                                y="3.5"
+                                textAnchor="middle"
+                                className="font-mono text-[8.5px] font-bold select-none tracking-tight"
+                              >
+                                <tspan fill={highContrast ? '#000000' : '#34d399'} fontWeight="800">
+                                  L:{' '}
+                                </tspan>
+                                <tspan fill={highContrast ? '#000000' : '#f8fafc'}>{lengthStr}</tspan>
+                                <tspan fill={highContrast ? '#444444' : '#64748b'}> │ </tspan>
+                                <tspan fill={highContrast ? '#000000' : '#38bdf8'} fontWeight="800">
+                                  W:{' '}
+                                </tspan>
+                                <tspan fill={highContrast ? '#000000' : '#f8fafc'}>{widthStr}</tspan>
+                              </text>
+                            </g>
                           </g>
+                        );
+                      })()
+                    : layerVisibility.dimensions && (
+                        <g className="pointer-events-none">
+                          <rect
+                            x={(wall.x1 + wall.x2) / 2 - 20}
+                            y={(wall.y1 + wall.y2) / 2 - 8}
+                            width="40"
+                            height="16"
+                            rx="3"
+                            fill={highContrast ? 'white' : '#1e293b'}
+                            className="opacity-95"
+                          />
+                          <text
+                            x={(wall.x1 + wall.x2) / 2}
+                            y={(wall.y1 + wall.y2) / 2 + 3}
+                            textAnchor="middle"
+                            className={`text-[8px] font-mono font-bold ${highContrast ? 'fill-black' : 'fill-slate-100'}`}
+                          >
+                            {(() => {
+                              const len = getDistance({ x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 });
+                              return formatDimension(len, unit);
+                            })()}
+                          </text>
                         </g>
-                      );
-                    })()
-                  ) : (
-                    layerVisibility.dimensions && (
-                      <g className="pointer-events-none">
-                        <rect
-                          x={(wall.x1 + wall.x2) / 2 - 20}
-                          y={(wall.y1 + wall.y2) / 2 - 8}
-                          width="40"
-                          height="16"
-                          rx="3"
-                          fill={highContrast ? 'white' : '#1e293b'}
-                          className="opacity-95"
-                        />
-                        <text
-                          x={(wall.x1 + wall.x2) / 2}
-                          y={(wall.y1 + wall.y2) / 2 + 3}
-                          textAnchor="middle"
-                          className={`text-[8px] font-mono font-bold ${highContrast ? 'fill-black' : 'fill-slate-100'}`}
-                        >
-                          {(() => {
-                            const len = getDistance({ x: wall.x1, y: wall.y1 }, { x: wall.x2, y: wall.y2 });
-                            return formatDimension(len, unit);
-                          })()}
-                        </text>
-                      </g>
-                    )
-                  )}
+                      )}
 
                   {/* Drag joints handles at wall endpoints */}
                   {isSelected && (
@@ -1201,7 +1215,12 @@ export default function FloorPlanCanvas({
                       strokeWidth="1.5"
                       className="filter drop-shadow-md"
                     />
-                    <text x="0" y="3.5" textAnchor="middle" className="fill-white text-[9px] font-mono font-bold">
+                    <text
+                      x="0"
+                      y="3.5"
+                      textAnchor="middle"
+                      className="fill-white text-[9px] font-mono font-bold"
+                    >
                       <tspan fill="#a7f3d0">L: </tspan>
                       {liveDims.lengthStr}
                       <tspan fill="#6ee7b7"> │ </tspan>

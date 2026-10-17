@@ -24,12 +24,14 @@ describe('normalizePlan', () => {
         rooms: [{ width: -100, height: 0 }],
         openings: [{ type: 'spaceship', rotation: 100000 }],
         furniture: [{ subType: 5 }],
-      })
+      }),
     ).not.toThrow();
   });
 
   it('coerces non-numeric coordinates to finite numbers', () => {
-    const plan = normalizePlan({ walls: [{ id: 'w', x1: '50', y1: null, x2: undefined, y2: 'nope', thickness: 'x' }] });
+    const plan = normalizePlan({
+      walls: [{ id: 'w', x1: '50', y1: null, x2: undefined, y2: 'nope', thickness: 'x' }],
+    });
     const w = plan.walls[0];
     expect(Number.isFinite(w.x1)).toBe(true);
     expect(Number.isFinite(w.y1)).toBe(true);
@@ -45,7 +47,12 @@ describe('normalizePlan', () => {
   });
 
   it('generates ids when the model omits them', () => {
-    const plan = normalizePlan({ rooms: [{ width: 10, height: 10 }, { width: 10, height: 10 }] });
+    const plan = normalizePlan({
+      rooms: [
+        { width: 10, height: 10 },
+        { width: 10, height: 10 },
+      ],
+    });
     expect(plan.rooms).toHaveLength(2);
     expect(plan.rooms[0].id).toBeTruthy();
     expect(plan.rooms[0].id).not.toBe(plan.rooms[1].id);
@@ -90,7 +97,17 @@ describe('normalizePlan', () => {
       rooms: [{ id: 'r', x: 0, y: 0, width: 100, height: 100, label: 'Living', color: 'rgba(0,0,0,0.1)' }],
       openings: [{ id: 'o', type: 'door', subType: 'single', x: 50, y: 0, width: 32, rotation: 0 }],
       furniture: [
-        { id: 'f', subType: 'sofa', label: 'Sofa', x: 50, y: 50, width: 60, height: 30, rotation: 0, category: 'living' },
+        {
+          id: 'f',
+          subType: 'sofa',
+          label: 'Sofa',
+          x: 50,
+          y: 50,
+          width: 60,
+          height: 30,
+          rotation: 0,
+          category: 'living',
+        },
       ],
     };
     const once = normalizePlan(input);

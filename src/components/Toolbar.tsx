@@ -142,7 +142,10 @@ export default function Toolbar({
   const divider = <div className="h-5 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />;
 
   return (
-    <div id="toolbar-container" className={`p-3 flex flex-wrap gap-3 items-center justify-between ${toolbarBg}`}>
+    <div
+      id="toolbar-container"
+      className={`p-3 flex flex-wrap gap-3 items-center justify-between ${toolbarBg}`}
+    >
       {/* 1. Sidebars & History & Modification */}
       <div className="flex items-center gap-1.5">
         {onToggleLeftSidebar && (
@@ -150,10 +153,18 @@ export default function Toolbar({
             id="toggle-left-sidebar-btn"
             onClick={onToggleLeftSidebar}
             className={buttonClass(isLeftSidebarOpen ? 'active' : 'idle', highContrast)}
-            title={isLeftSidebarOpen ? 'Hide Left Sidebar (Catalog & Tools)' : 'Show Left Sidebar (Catalog & Tools)'}
+            title={
+              isLeftSidebarOpen
+                ? 'Hide Left Sidebar (Catalog & Tools)'
+                : 'Show Left Sidebar (Catalog & Tools)'
+            }
             aria-pressed={isLeftSidebarOpen}
           >
-            {isLeftSidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+            {isLeftSidebarOpen ? (
+              <PanelLeftClose className="w-4 h-4" />
+            ) : (
+              <PanelLeftOpen className="w-4 h-4" />
+            )}
             <span className="hidden sm:inline">Palette</span>
           </button>
         )}
@@ -251,7 +262,9 @@ export default function Toolbar({
         >
           <ZoomOut className="w-4 h-4" />
         </button>
-        <span className="text-xs font-mono font-bold min-w-[44px] text-center">{Math.round(zoom * 100)}%</span>
+        <span className="text-xs font-mono font-bold min-w-[44px] text-center">
+          {Math.round(zoom * 100)}%
+        </span>
         <button
           id="zoom-in-btn"
           onClick={() => setZoom((z) => Math.min(MAX_ZOOM, +(z + ZOOM_STEP).toFixed(2)))}
@@ -395,11 +408,19 @@ export default function Toolbar({
             id="toggle-right-sidebar-btn"
             onClick={onToggleRightSidebar}
             className={buttonClass(isRightSidebarOpen ? 'active' : 'idle', highContrast)}
-            title={isRightSidebarOpen ? 'Hide Right Sidebar (Properties & Layers)' : 'Show Right Sidebar (Properties & Layers)'}
+            title={
+              isRightSidebarOpen
+                ? 'Hide Right Sidebar (Properties & Layers)'
+                : 'Show Right Sidebar (Properties & Layers)'
+            }
             aria-pressed={isRightSidebarOpen}
           >
             <span className="hidden sm:inline">Inspector</span>
-            {isRightSidebarOpen ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
+            {isRightSidebarOpen ? (
+              <PanelRightClose className="w-4 h-4" />
+            ) : (
+              <PanelRightOpen className="w-4 h-4" />
+            )}
           </button>
         )}
       </div>

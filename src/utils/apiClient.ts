@@ -18,14 +18,21 @@
 export class ApiError extends Error {
   constructor(
     message: string,
-    readonly status: number
+    readonly status: number,
   ) {
     super(message);
     this.name = 'ApiError';
   }
 }
 
-export async function apiPost<T = any>(url: string, body: unknown, signal?: AbortSignal): Promise<T> {
+/**
+ * POST JSON and parse the reply.
+ *
+ * `T` defaults to `unknown`, not `any`: a caller that does not describe the
+ * response shape has to narrow it before touching a property, which is the
+ * whole point of running the app under `strict`.
+ */
+export async function apiPost<T = unknown>(url: string, body: unknown, signal?: AbortSignal): Promise<T> {
   let response: Response;
   try {
     response = await fetch(url, {
@@ -41,7 +48,7 @@ export async function apiPost<T = any>(url: string, body: unknown, signal?: Abor
 
   const text = await response.text();
 
-  let data: any = null;
+  let data: unknown = null;
   if (text) {
     try {
       data = JSON.parse(text);
@@ -52,10 +59,13 @@ export async function apiPost<T = any>(url: string, body: unknown, signal?: Abor
     }
   }
 
+  // Narrow once, here, so nothing downstream has to reach for `any`.
+  const record = typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : null;
+
   if (!response.ok) {
     const message =
-      data?.message ||
-      data?.error ||
+      (typeof record?.message === 'string' && record.message) ||
+      (typeof record?.error === 'string' && record.error) ||
       (response.status === 413
         ? 'That upload is too large. Please use a smaller image.'
         : `Request failed (${response.status}).`);

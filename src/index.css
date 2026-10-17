@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 /* Markdown styling for the AI Architect chat. Without this plugin the `prose`
    classes on the message bodies generate no CSS at all, so model output

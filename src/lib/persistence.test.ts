@@ -49,7 +49,11 @@ describe('local persistence', () => {
   it('normalizes a hand-edited stored plan', () => {
     localStorage.setItem(
       'landcraft:plan',
-      JSON.stringify({ version: 1, savedAt: '2026-01-01T00:00:00Z', plan: { rooms: [{ width: -5, height: 0 }] } })
+      JSON.stringify({
+        version: 1,
+        savedAt: '2026-01-01T00:00:00Z',
+        plan: { rooms: [{ width: -5, height: 0 }] },
+      }),
     );
     const restored = loadPlanLocally();
     expect(restored).not.toBeNull();
@@ -83,9 +87,9 @@ describe('parsePlanFile', () => {
   });
 
   it('rejects a file with no drawable content', () => {
-    expect(() => parsePlanFile(JSON.stringify({ walls: [], rooms: [], openings: [], furniture: [] }))).toThrow(
-      /does not contain any/i
-    );
+    expect(() =>
+      parsePlanFile(JSON.stringify({ walls: [], rooms: [], openings: [], furniture: [] })),
+    ).toThrow(/does not contain any/i);
   });
 
   it('normalizes hostile field values rather than trusting the file', () => {

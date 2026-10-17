@@ -4,14 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import {
-  HISTORY_LIMIT,
-  canRedo,
-  canUndo,
-  editorReducer,
-  initEditorState,
-  trimHistory,
-} from './editorState';
+import { HISTORY_LIMIT, canRedo, canUndo, editorReducer, initEditorState, trimHistory } from './editorState';
 import { emptyPlan, makeId, moveRoomWithContents, updateElement, deleteElement, addElement } from './planOps';
 import type { FloorPlanData } from '../types';
 
@@ -155,10 +148,32 @@ describe('planOps', () => {
   const base = (): FloorPlanData => ({
     walls: [{ id: 'w1', x1: 0, y1: 0, x2: 100, y2: 0, thickness: 10 }],
     rooms: [{ id: 'r1', x: 0, y: 0, width: 100, height: 100, label: 'A', color: 'rgba(0,0,0,0.1)' }],
-    openings: [{ id: 'o1', type: 'door', subType: 'single', x: 50, y: 0, width: 32, rotation: 0, wallId: 'w1' }],
+    openings: [
+      { id: 'o1', type: 'door', subType: 'single', x: 50, y: 0, width: 32, rotation: 0, wallId: 'w1' },
+    ],
     furniture: [
-      { id: 'f1', subType: 'sofa', label: 'Sofa', x: 50, y: 50, width: 40, height: 20, rotation: 0, category: 'living' },
-      { id: 'f2', subType: 'bed', label: 'Bed', x: 900, y: 900, width: 60, height: 80, rotation: 0, category: 'bedroom' },
+      {
+        id: 'f1',
+        subType: 'sofa',
+        label: 'Sofa',
+        x: 50,
+        y: 50,
+        width: 40,
+        height: 20,
+        rotation: 0,
+        category: 'living',
+      },
+      {
+        id: 'f2',
+        subType: 'bed',
+        label: 'Bed',
+        x: 900,
+        y: 900,
+        width: 60,
+        height: 80,
+        rotation: 0,
+        category: 'bedroom',
+      },
     ],
   });
 

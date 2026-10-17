@@ -5,6 +5,9 @@ import { getWallBounds } from '../utils/geoUtils';
 import { apiPost } from '../utils/apiClient';
 import { useResetOnDeps } from '../hooks/useDerivedState';
 
+/** Finish tier, which selects the material rate card. */
+type QualityLevel = 'budget' | 'standard' | 'premium';
+
 interface CostEstimatorPanelProps {
   plan: FloorPlanData;
   onClose: () => void;
@@ -32,21 +35,21 @@ const MATERIAL_COSTS = {
     door: 800,
     window: 1500,
     baseRate: 3000,
-  }
+  },
 };
 
 const REGION_MULTIPLIERS: Record<string, number> = {
   'north-america': 1.2,
-  'europe': 1.1,
-  'asia': 0.8,
-  'africa': 0.7,
+  europe: 1.1,
+  asia: 0.8,
+  africa: 0.7,
   'south-america': 0.7,
   'middle-east': 0.9,
   'global-average': 1.0,
 };
 
 export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanelProps) {
-  const [qualityLevel, setQualityLevel] = useState<'budget' | 'standard' | 'premium'>('standard');
+  const [qualityLevel, setQualityLevel] = useState<QualityLevel>('standard');
   const [region, setRegion] = useState<string>('global-average');
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [isLoadingAi, setIsLoadingAi] = useState(false);
@@ -60,7 +63,7 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
   // Calculate metrics
   const metrics = useMemo(() => {
     let totalAreaPixels = 0;
-    plan.rooms.forEach(r => {
+    plan.rooms.forEach((r) => {
       totalAreaPixels += r.width * r.height;
     });
 
@@ -73,18 +76,18 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
     const envelopeAreaM2 = bounds ? (bounds.width * bounds.height) / 1600 : 0;
     const totalAreaM2 = roomAreaM2 > 0 ? roomAreaM2 : envelopeAreaM2;
     const areaIsEnvelope = roomAreaM2 <= 0 && envelopeAreaM2 > 0;
-    
+
     let totalWallLengthPixels = 0;
-    plan.walls.forEach(w => {
+    plan.walls.forEach((w) => {
       const dx = w.x2 - w.x1;
       const dy = w.y2 - w.y1;
-      totalWallLengthPixels += Math.sqrt(dx*dx + dy*dy);
+      totalWallLengthPixels += Math.sqrt(dx * dx + dy * dy);
     });
     const totalWallLengthM = totalWallLengthPixels / 40;
 
     let doorsCount = 0;
     let windowsCount = 0;
-    plan.openings.forEach(o => {
+    plan.openings.forEach((o) => {
       if (o.type === 'door') doorsCount++;
       if (o.type === 'window') windowsCount++;
     });
@@ -94,7 +97,7 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
       areaIsEnvelope,
       wallLengthM: totalWallLengthM,
       doors: doorsCount,
-      windows: windowsCount
+      windows: windowsCount,
     };
   }, [plan]);
 
@@ -107,7 +110,7 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
     const flooringCost = metrics.areaM2 * rates.flooring * multiplier;
     const wallFinishCost = metrics.wallLengthM * 2.7 /* avg height */ * rates.wallFinish * multiplier;
     const fixturesCost = (metrics.doors * rates.door + metrics.windows * rates.window) * multiplier;
-    
+
     const subtotal = structuralCost + flooringCost + wallFinishCost + fixturesCost;
     const contingency = subtotal * 0.15; // 15% contingency
     const total = subtotal + contingency;
@@ -119,13 +122,17 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
       fixtures: fixturesCost,
       subtotal,
       contingency,
-      total
+      total,
     };
   }, [metrics, qualityLevel, region]);
 
   // Format currency
   const formatCurrency = (val: number) => {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 0,
+    }).format(val);
   };
 
   // Enter the loading state the moment the inputs change, rather than one
@@ -140,12 +147,12 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
 
     const fetchOptimizations = async () => {
       try {
-        const data = await apiPost('/api/optimize-costs', {
+        const data = await apiPost<{ success: boolean; suggestions?: string[] }>('/api/optimize-costs', {
           plan,
           metrics,
           costs,
           qualityLevel,
-          region
+          region,
         });
 
         if (!active) return;
@@ -157,16 +164,24 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
           // Fallback static suggestions if API fails or is unconfigured
           const staticSuggestions = [];
           if (metrics.windows > 10 && qualityLevel === 'premium') {
-            staticSuggestions.push("High window count on premium tier significantly increases cost. Consider consolidating smaller windows into larger single panes.");
+            staticSuggestions.push(
+              'High window count on premium tier significantly increases cost. Consider consolidating smaller windows into larger single panes.',
+            );
           }
           if (metrics.areaM2 > 150) {
-            staticSuggestions.push("Footprint exceeds 150m². Optimizing hallway space could reduce structural costs by 5-8%.");
+            staticSuggestions.push(
+              'Footprint exceeds 150m². Optimizing hallway space could reduce structural costs by 5-8%.',
+            );
           }
           if (metrics.doors > plan.rooms.length * 1.5) {
-            staticSuggestions.push("High door-to-room ratio. Using open archways in communal areas could save on fixture costs.");
+            staticSuggestions.push(
+              'High door-to-room ratio. Using open archways in communal areas could save on fixture costs.',
+            );
           }
           if (staticSuggestions.length === 0) {
-            staticSuggestions.push("No obvious cost sinks found by the local rule checks. Run an AI pass for deeper value-engineering suggestions.");
+            staticSuggestions.push(
+              'No obvious cost sinks found by the local rule checks. Run an AI pass for deeper value-engineering suggestions.',
+            );
           }
           setAiSuggestions(staticSuggestions);
           setAiSuggestionSource('local');
@@ -174,9 +189,11 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
       } catch {
         if (!active) return;
         setAiSuggestions([
-          "Unable to reach AI Architect. Local static analysis active.",
-          metrics.windows > 8 ? "Consider reducing window count to lower fixture costs." : "Window ratio is efficient.",
-          "Ensure structural base rate accounts for local building codes."
+          'Unable to reach AI Architect. Local static analysis active.',
+          metrics.windows > 8
+            ? 'Consider reducing window count to lower fixture costs.'
+            : 'Window ratio is efficient.',
+          'Ensure structural base rate accounts for local building codes.',
         ]);
         setAiSuggestionSource('local');
       } finally {
@@ -189,12 +206,13 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
     return () => {
       active = false;
     };
-  }, [metrics, qualityLevel, region, plan, costs.total, costs.subtotal]);
+    // `costs` is a useMemo over metrics/qualityLevel/region, so its identity is
+    // stable. Naming it whole is what the effect body actually reads.
+  }, [metrics, qualityLevel, region, plan, costs]);
 
   return (
     <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur flex items-center justify-center p-4">
       <div className="bg-slate-900 border border-slate-700 w-full max-w-4xl max-h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden text-slate-200">
-        
         {/* Header */}
         <div className="flex items-center justify-between p-4 md:p-6 border-b border-slate-800 bg-slate-900/50">
           <div className="flex items-center gap-3">
@@ -206,7 +224,7 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
               <p className="text-xs text-slate-400">Rough order of magnitude (ROM) estimate</p>
             </div>
           </div>
-          <button 
+          <button
             onClick={onClose}
             className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors"
           >
@@ -216,7 +234,6 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 md:p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
-          
           {/* Left Column: Settings & Quantities */}
           <div className="space-y-6">
             <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 space-y-4">
@@ -224,12 +241,12 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
                 <Settings className="w-4 h-4 text-slate-400" />
                 Parameters
               </h3>
-              
+
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-400">Quality Level</label>
-                <select 
-                  value={qualityLevel} 
-                  onChange={e => setQualityLevel(e.target.value as any)}
+                <select
+                  value={qualityLevel}
+                  onChange={(e) => setQualityLevel(e.target.value as QualityLevel)}
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-emerald-500"
                 >
                   <option value="budget">Budget / Standard</option>
@@ -240,9 +257,9 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
 
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-400">Region Modifier</label>
-                <select 
-                  value={region} 
-                  onChange={e => setRegion(e.target.value)}
+                <select
+                  value={region}
+                  onChange={(e) => setRegion(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-emerald-500"
                 >
                   <option value="global-average">Global Average (Baseline)</option>
@@ -286,7 +303,6 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
 
           {/* Middle & Right: Breakdown & AI Suggestions */}
           <div className="md:col-span-2 space-y-6">
-            
             {/* Total Estimate */}
             <div className="bg-gradient-to-br from-emerald-900/30 to-slate-900 p-6 rounded-2xl border border-emerald-500/20 flex flex-col sm:flex-row items-center justify-between gap-6">
               <div>
@@ -295,7 +311,8 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
                   {formatCurrency(costs.total)}
                 </div>
                 <p className="text-[10px] text-slate-500 mt-2 max-w-xs leading-relaxed">
-                  *Excludes land acquisition, permits, site prep, and architectural fees. Values are rough approximations.
+                  *Excludes land acquisition, permits, site prep, and architectural fees. Values are rough
+                  approximations.
                 </p>
               </div>
               <div className="w-full sm:w-auto flex-1 max-w-xs space-y-2">
@@ -324,16 +341,18 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
                   { label: 'Flooring', val: costs.flooring, color: 'bg-emerald-500' },
                   { label: 'Wall Finishes', val: costs.wallFinish, color: 'bg-amber-500' },
                   { label: 'Fixtures (Doors/Windows)', val: costs.fixtures, color: 'bg-purple-500' },
-                ].map(item => (
+                ].map((item) => (
                   <div key={item.label} className="space-y-1">
                     <div className="flex justify-between text-xs">
                       <span className="text-slate-300 font-medium">{item.label}</span>
-                      <span className="text-slate-400">{formatCurrency(item.val)} ({((item.val / costs.subtotal) * 100).toFixed(1)}%)</span>
+                      <span className="text-slate-400">
+                        {formatCurrency(item.val)} ({((item.val / costs.subtotal) * 100).toFixed(1)}%)
+                      </span>
                     </div>
                     <div className="h-2 w-full bg-slate-900 rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full ${item.color} rounded-full`} 
-                        style={{ width: `${Math.max(2, (item.val / costs.subtotal) * 100)}%` }} 
+                      <div
+                        className={`h-full ${item.color} rounded-full`}
+                        style={{ width: `${Math.max(2, (item.val / costs.subtotal) * 100)}%` }}
                       />
                     </div>
                   </div>
@@ -350,7 +369,7 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
                   {aiSuggestionSource === 'ai' ? 'AI generated' : 'Local rules'}
                 </span>
               </h3>
-              
+
               {isLoadingAi ? (
                 <div className="flex items-center gap-3 text-slate-400 text-xs py-4">
                   <div className="w-4 h-4 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
@@ -359,7 +378,10 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
               ) : (
                 <ul className="space-y-3">
                   {aiSuggestions.map((sug, i) => (
-                    <li key={i} className="text-xs text-slate-300 flex items-start gap-2 bg-blue-950/40 p-3 rounded-lg border border-blue-900/50 leading-relaxed">
+                    <li
+                      key={i}
+                      className="text-xs text-slate-300 flex items-start gap-2 bg-blue-950/40 p-3 rounded-lg border border-blue-900/50 leading-relaxed"
+                    >
                       <span className="text-blue-400 mt-0.5">•</span>
                       {sug}
                     </li>
@@ -367,7 +389,6 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
                 </ul>
               )}
             </div>
-
           </div>
         </div>
 
@@ -375,10 +396,13 @@ export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanel
         <div className="p-4 bg-slate-950 border-t border-slate-800 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
           <p className="text-[10px] text-slate-500 leading-normal">
-            <strong>Disclaimer:</strong> This cost estimator provides a Rough Order of Magnitude (ROM) estimate based on generalized square-meter rates. It does not account for specific site conditions, localized material inflation, specialized structural requirements, or contractor markups. Always consult with a licensed contractor and quantity surveyor before finalizing budgets.
+            <strong>Disclaimer:</strong> This cost estimator provides a Rough Order of Magnitude (ROM)
+            estimate based on generalized square-meter rates. It does not account for specific site
+            conditions, localized material inflation, specialized structural requirements, or contractor
+            markups. Always consult with a licensed contractor and quantity surveyor before finalizing
+            budgets.
           </p>
         </div>
-
       </div>
     </div>
   );

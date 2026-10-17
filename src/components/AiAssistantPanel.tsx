@@ -4,13 +4,13 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Sparkles, 
-  CheckCircle2, 
-  AlertTriangle, 
-  Info, 
-  Activity, 
-  Lightbulb, 
+import {
+  Sparkles,
+  CheckCircle2,
+  AlertTriangle,
+  Info,
+  Activity,
+  Lightbulb,
   ShieldAlert,
   Sliders,
   ChevronUp,
@@ -20,65 +20,103 @@ import {
   Check,
   Image as ImageIcon,
   Camera,
-  UploadCloud
+  UploadCloud,
 } from 'lucide-react';
 import { FloorPlanData, AIReviewItem, DimensionUnit } from '../types';
 import { checkOverlapWarnings } from '../utils/geoUtils';
 import { apiPost } from '../utils/apiClient';
 import { useResetOnDeps } from '../hooks/useDerivedState';
+import { normalizePlan } from '../utils/normalizePlan';
+
+/**
+ * One layout option as returned by /api/generate-floor-plan or
+ * /api/generate-from-photo. Mirrors `resolveVariants()` in server.ts.
+ */
+interface GeneratedVariant {
+  id: string;
+  title: string;
+  /** Present because server.ts spreads the raw model JSON into the variant. */
+  name?: string;
+  /** Present only on a variant that failed to generate. */
+  error?: string;
+  message?: string;
+  plan?: unknown;
+  rationale?: {
+    architecturalConcept?: string;
+    zoningRationale?: string;
+    circulationFlow?: string;
+    naturalLightAndVents?: string;
+  };
+  dimensions?: {
+    widthMeters?: number;
+    lengthMeters?: number;
+    totalBuildAreaM2?: number;
+    scalePixelsPerMeter?: number;
+  };
+}
+
+interface GenerateResponse {
+  success: boolean;
+  message?: string;
+  variants?: GeneratedVariant[];
+}
 
 interface AiAssistantPanelProps {
   plan: FloorPlanData;
   unit: DimensionUnit;
   highContrast: boolean;
-  onLoadPlan?: (plan: FloorPlanData) => void;
+  /** Receives raw model output; the parent normalizes it before rendering. */
+  onLoadPlan?: (plan: unknown) => void;
 }
 
 // Example prompts & matching configuration templates for demonstrations (Input -> Output)
 const DEMONSTRATIONS = [
   {
-    id: "demo-bungalow",
-    label: "3-Bed Bungalow",
-    prompt: "Generate a modern 3-bedroom bungalow with an integrated outdoor porch, master bedroom ensuite, and open-plan central family living zone.",
+    id: 'demo-bungalow',
+    label: '3-Bed Bungalow',
+    prompt:
+      'Generate a modern 3-bedroom bungalow with an integrated outdoor porch, master bedroom ensuite, and open-plan central family living zone.',
     plotWidth: 15,
     plotLength: 20,
     bedrooms: 3,
     bathrooms: 2,
     floors: 1,
-    style: "Modern"
+    style: 'Modern',
   },
   {
-    id: "demo-cabin",
-    label: "Scandinavian Cabin",
-    prompt: "A cozy Scandinavian tiny cabin on a narrow lot, featuring shared wet-walls between kitchen/bath to minimize plumbing costs, and a wood stove corner.",
+    id: 'demo-cabin',
+    label: 'Scandinavian Cabin',
+    prompt:
+      'A cozy Scandinavian tiny cabin on a narrow lot, featuring shared wet-walls between kitchen/bath to minimize plumbing costs, and a wood stove corner.',
     plotWidth: 8,
     plotLength: 10,
     bedrooms: 1,
     bathrooms: 1,
     floors: 1,
-    style: "Scandinavian"
+    style: 'Scandinavian',
   },
   {
-    id: "demo-loft",
-    label: "Minimalist Loft",
-    prompt: "Minimalist industrial flat with spacious circulation paths, huge front windows, private office zone, and separate master suite with walk-in washroom.",
+    id: 'demo-loft',
+    label: 'Minimalist Loft',
+    prompt:
+      'Minimalist industrial flat with spacious circulation paths, huge front windows, private office zone, and separate master suite with walk-in washroom.',
     plotWidth: 12,
     plotLength: 12,
     bedrooms: 2,
     bathrooms: 1,
     floors: 1,
-    style: "Minimalist"
-  }
+    style: 'Minimalist',
+  },
 ];
 
 // Contextual architectural loading phases for the spinner
 const LOADING_PHASES = [
-  "Drafting site layout perimeter boundaries...",
-  "Running spatial packing and room boundary solver...",
-  "Aligning load-bearing walls and interior dividers...",
-  "Placing exterior entries and window ventilation points...",
-  "Calculating clearances and styling furniture orientation...",
-  "Assembling detailed architectural concept rationale..."
+  'Drafting site layout perimeter boundaries...',
+  'Running spatial packing and room boundary solver...',
+  'Aligning load-bearing walls and interior dividers...',
+  'Placing exterior entries and window ventilation points...',
+  'Calculating clearances and styling furniture orientation...',
+  'Assembling detailed architectural concept rationale...',
 ];
 
 export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan }: AiAssistantPanelProps) {
@@ -87,13 +125,13 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
   const [isExpanded, setIsExpanded] = useState(true);
 
   // Form Parameters State
-  const [promptInput, setPromptInput] = useState("");
+  const [promptInput, setPromptInput] = useState('');
   const [plotWidth, setPlotWidth] = useState(15);
   const [plotLength, setPlotLength] = useState(20);
   const [bedrooms, setBedrooms] = useState(3);
   const [bathrooms, setBathrooms] = useState(2);
   const [floors, setFloors] = useState(1);
-  const [style, setStyle] = useState("Modern");
+  const [style, setStyle] = useState('Modern');
   const [variantsCount, setVariantsCount] = useState(2);
 
   // Photo Upload State
@@ -102,9 +140,9 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
 
   // Generation Results State
   const [isGenerating, setIsGenerating] = useState(false);
-  const [loadingPhase, setLoadingPhase] = useState("");
+  const [loadingPhase, setLoadingPhase] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [generatedVariants, setGeneratedVariants] = useState<any[]>([]);
+  const [generatedVariants, setGeneratedVariants] = useState<GeneratedVariant[]>([]);
   const [selectedVariantIdx, setSelectedVariantIdx] = useState(0);
   const [rationaleSubTab, setRationaleSubTab] = useState<'concept' | 'zoning' | 'flow' | 'light'>('concept');
 
@@ -117,7 +155,9 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
    */
   const runStaticAuditRef = useRef<() => void>(() => {});
   const [isAuditing, setIsAuditing] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<'all' | 'structure' | 'flow' | 'accessibility' | 'safety'>('all');
+  const [selectedCategory, setSelectedCategory] = useState<
+    'all' | 'structure' | 'flow' | 'accessibility' | 'safety'
+  >('all');
   const [optimizedPlan, setOptimizedPlan] = useState<FloorPlanData | null>(null);
 
   // Run dynamic verification whenever the parent editor's floor plan updates.
@@ -149,7 +189,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
   }, [isGenerating]);
 
   // Handle template selection
-  const handleApplyDemo = (demo: typeof DEMONSTRATIONS[0]) => {
+  const handleApplyDemo = (demo: (typeof DEMONSTRATIONS)[0]) => {
     setPromptInput(demo.prompt);
     setPlotWidth(demo.plotWidth);
     setPlotLength(demo.plotLength);
@@ -173,17 +213,17 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
   const handleGenerateFromPhoto = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!photoPreview) {
-      setErrorMsg("Please upload a plot photo first.");
+      setErrorMsg('Please upload a plot photo first.');
       return;
     }
-    
+
     setIsGenerating(true);
     setLoadingPhase(LOADING_PHASES[0]);
     setErrorMsg(null);
     setGeneratedVariants([]);
 
     try {
-      const result = await apiPost('/api/design-from-photo', {
+      const result = await apiPost<GenerateResponse>('/api/design-from-photo', {
         imageBase64: photoPreview,
         mimeType: photoFile?.type || 'image/jpeg',
         prompt: promptInput,
@@ -193,7 +233,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         bathrooms,
         floors,
         style,
-        variantsCount
+        variantsCount,
       });
 
       if (result.success && result.variants && result.variants.length > 0) {
@@ -203,11 +243,11 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
           onLoadPlan(result.variants[0].plan);
         }
       } else {
-        throw new Error("Received an empty response from layout coordinator.");
+        throw new Error('Received an empty response from layout coordinator.');
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      setErrorMsg(err?.message || "An unexpected generation error occurred.");
+      setErrorMsg(err instanceof Error ? err.message : 'An unexpected generation error occurred.');
     } finally {
       setIsGenerating(false);
     }
@@ -222,7 +262,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
     setGeneratedVariants([]);
 
     try {
-      const result = await apiPost('/api/generate-floor-plan', {
+      const result = await apiPost<GenerateResponse>('/api/generate-floor-plan', {
         prompt: promptInput,
         plotWidth,
         plotLength,
@@ -230,7 +270,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         bathrooms,
         floors,
         style,
-        variantsCount
+        variantsCount,
       });
 
       if (result.success && result.variants && result.variants.length > 0) {
@@ -241,11 +281,17 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
           onLoadPlan(result.variants[0].plan);
         }
       } else {
-        throw new Error("Received an empty response from layout coordinator. Please check your plot criteria.");
+        throw new Error(
+          'Received an empty response from layout coordinator. Please check your plot criteria.',
+        );
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      setErrorMsg(err?.message || "An unexpected generation error occurred. Please verify your connection and try again.");
+      setErrorMsg(
+        err instanceof Error
+          ? err.message
+          : 'An unexpected generation error occurred. Please verify your connection and try again.',
+      );
     } finally {
       setIsGenerating(false);
     }
@@ -265,10 +311,12 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
     const items: AIReviewItem[] = [];
     const { walls, rooms, openings, furniture } = plan;
 
-    const roomLabels = rooms.map(r => r.label.toLowerCase());
-    const hasBed = roomLabels.some(l => l.includes('bed') || l.includes('sleeping'));
-    const hasBath = roomLabels.some(l => l.includes('bath') || l.includes('wc') || l.includes('toilet'));
-    const hasKitchen = roomLabels.some(l => l.includes('kitchen') || l.includes('cooking') || l.includes('studio'));
+    const roomLabels = rooms.map((r) => r.label.toLowerCase());
+    const hasBed = roomLabels.some((l) => l.includes('bed') || l.includes('sleeping'));
+    const hasBath = roomLabels.some((l) => l.includes('bath') || l.includes('wc') || l.includes('toilet'));
+    const hasKitchen = roomLabels.some(
+      (l) => l.includes('kitchen') || l.includes('cooking') || l.includes('studio'),
+    );
 
     if (rooms.length === 0) {
       items.push({
@@ -276,7 +324,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         type: 'info',
         category: 'structure',
         title: 'Define Room Zones',
-        message: 'Draw or stamp Room Zones to enable total area calculation and professional room labeling.'
+        message: 'Draw or stamp Room Zones to enable total area calculation and professional room labeling.',
       });
     } else {
       if (!hasBed) {
@@ -285,7 +333,8 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
           type: 'warning',
           category: 'structure',
           title: 'Zoning: No Bedroom Zone',
-          message: 'An ideal home layout requires dedicated personal space. Add a Bedroom zone to organize sleeping quarters.'
+          message:
+            'An ideal home layout requires dedicated personal space. Add a Bedroom zone to organize sleeping quarters.',
         });
       }
       if (!hasBath) {
@@ -294,7 +343,8 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
           type: 'error',
           category: 'structure',
           title: 'Code: Bathroom Required',
-          message: 'Residential building codes mandate at least one fully partitioned bathroom with proper plumbing clearance.'
+          message:
+            'Residential building codes mandate at least one fully partitioned bathroom with proper plumbing clearance.',
         });
       }
       if (!hasKitchen) {
@@ -303,13 +353,14 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
           type: 'warning',
           category: 'structure',
           title: 'Zoning: Food Preparation',
-          message: 'Consider partitioning or stamping a Kitchen area with a wet-wall for water & drain utility alignment.'
+          message:
+            'Consider partitioning or stamping a Kitchen area with a wet-wall for water & drain utility alignment.',
         });
       }
     }
 
-    const doors = openings.filter(o => o.type === 'door');
-    const windows = openings.filter(o => o.type === 'window');
+    const doors = openings.filter((o) => o.type === 'door');
+    const windows = openings.filter((o) => o.type === 'window');
 
     if (walls.length > 0 && doors.length === 0) {
       items.push({
@@ -317,7 +368,8 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         type: 'error',
         category: 'flow',
         title: 'Safety: Missing Doors',
-        message: 'No doors detected! Your building shell has no point of entry and no marked emergency escape route.'
+        message:
+          'No doors detected! Your building shell has no point of entry and no marked emergency escape route.',
       });
     }
 
@@ -327,18 +379,19 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         type: 'warning',
         category: 'flow',
         title: 'Daylighting & Ventilation',
-        message: 'No windows detected. Most residential codes require natural light and ventilation in habitable rooms — add windows to living and sleeping areas.'
+        message:
+          'No windows detected. Most residential codes require natural light and ventilation in habitable rooms — add windows to living and sleeping areas.',
       });
     }
 
-    const narrowDoors = doors.filter(d => d.width < 32);
+    const narrowDoors = doors.filter((d) => d.width < 32);
     if (narrowDoors.length > 0) {
       items.push({
         id: 'narrow-doors',
         type: 'warning',
         category: 'accessibility',
         title: 'Access: Narrow Doorways',
-        message: `Detected ${narrowDoors.length} doorway(s) under 32" (0.8m). Universal Design recommends 32"-36" doors for wheelchair accessibility.`
+        message: `Detected ${narrowDoors.length} doorway(s) under 32" (0.8m). Universal Design recommends 32"-36" doors for wheelchair accessibility.`,
       });
     } else if (doors.length > 0) {
       items.push({
@@ -346,19 +399,20 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         type: 'success',
         category: 'accessibility',
         title: 'Accessible Door Passages',
-        message: 'Excellent! All configured doorways meet the standard 32"+ clearance threshold for full wheelchair access.'
+        message:
+          'Excellent! All configured doorways meet the standard 32"+ clearance threshold for full wheelchair access.',
       });
     }
 
-    const bathRooms = rooms.filter(r => r.label.toLowerCase().includes('bath'));
-    bathRooms.forEach(br => {
+    const bathRooms = rooms.filter((r) => r.label.toLowerCase().includes('bath'));
+    bathRooms.forEach((br) => {
       if (br.width < 60 || br.height < 60) {
         items.push({
           id: `bath-turning-${br.id}`,
           type: 'warning',
           category: 'accessibility',
           title: 'Universal Design: Bath Turning Radius',
-          message: `'${br.label}' lacks space for a 5-foot (1.5m) turning circle, hindering wheelchair maneuverability.`
+          message: `'${br.label}' lacks space for a 5-foot (1.5m) turning circle, hindering wheelchair maneuverability.`,
         });
       }
     });
@@ -370,7 +424,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         type: 'error',
         category: 'safety',
         title: 'Structural Overlap / Block',
-        message: ov.message
+        message: ov.message,
       });
     });
 
@@ -380,7 +434,8 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         type: 'success',
         category: 'safety',
         title: 'Clear Circulation Paths',
-        message: 'No furniture-furniture overlaps, out-of-room placements, or blocked door swings detected among the elements checked.'
+        message:
+          'No furniture-furniture overlaps, out-of-room placements, or blocked door swings detected among the elements checked.',
       });
     }
 
@@ -390,7 +445,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
       category: 'flow',
       title: 'Passive Solar Design Hint',
       message:
-        'Orient main living-space windows toward the sun\'s path to capture winter heat: south-facing in the Northern Hemisphere, north-facing in the Southern Hemisphere. East glazing suits morning light, west glazing risks afternoon overheating.'
+        "Orient main living-space windows toward the sun's path to capture winter heat: south-facing in the Northern Hemisphere, north-facing in the Southern Hemisphere. East glazing suits morning light, west glazing risks afternoon overheating.",
     });
 
     setReviews(items);
@@ -406,41 +461,50 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
     setOptimizedPlan(null);
 
     try {
-      const data = await apiPost('/api/analyze-blueprint', { plan });
+      const data = await apiPost<{
+        success: boolean;
+        message?: string;
+        issues?: Array<Partial<AIReviewItem> & { id?: string }>;
+        optimizedPlan?: unknown;
+      }>('/api/analyze-blueprint', { plan });
 
       if (!data.success) {
         throw new Error(data.message || 'Audit failed');
       }
 
-      const aiInsights = (data.issues || []).map((issue: any) => ({
-        ...issue,
-        id: issue.id || `deep-${Date.now()}-${Math.random()}`
+      const aiInsights: AIReviewItem[] = (data.issues ?? []).map((issue, i) => ({
+        id: typeof issue.id === 'string' && issue.id ? issue.id : `deep-${Date.now()}-${i}`,
+        type: issue.type ?? 'info',
+        category: issue.category ?? 'structure',
+        title: issue.title ?? 'Finding',
+        message: issue.message ?? '',
+        elementId: issue.elementId,
       }));
 
-      setReviews(prev => [...aiInsights, ...prev.filter(x => !x.id.startsWith('deep-'))]);
-      
+      setReviews((prev) => [...aiInsights, ...prev.filter((x) => !x.id.startsWith('deep-'))]);
+
       if (data.optimizedPlan) {
-        setOptimizedPlan(data.optimizedPlan);
+        setOptimizedPlan(normalizePlan(data.optimizedPlan));
       }
-      
-    } catch (err: any) {
-      console.error("Audit error:", err);
+    } catch (err) {
+      console.error('Audit error:', err);
+      const auditError = err instanceof Error ? err : new Error('Unknown audit failure');
       // Fallback or error display
       const errorInsight: AIReviewItem = {
         id: `deep-error-${Date.now()}`,
         type: 'error',
         category: 'structure',
         title: 'Audit Failed',
-        message: err.message || 'Could not connect to AI architect service.'
+        message: auditError.message,
       };
-      setReviews(prev => [errorInsight, ...prev.filter(x => !x.id.startsWith('deep-'))]);
+      setReviews((prev) => [errorInsight, ...prev.filter((x) => !x.id.startsWith('deep-'))]);
     } finally {
       setIsAuditing(false);
     }
   };
 
   const filteredReviews = reviews.filter(
-    r => selectedCategory === 'all' || r.category === selectedCategory
+    (r) => selectedCategory === 'all' || r.category === selectedCategory,
   );
 
   // UI styling classes based on theme/expand state
@@ -452,7 +516,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
   const categoryBtnStyle = (cat: typeof selectedCategory) => {
     const isActive = selectedCategory === cat;
     if (highContrast) {
-      return isActive 
+      return isActive
         ? 'bg-black text-white px-2 py-1 rounded text-[10px] font-bold border border-black'
         : 'bg-white text-black px-2 py-1 rounded text-[10px] font-bold border border-gray-300';
     }
@@ -462,8 +526,8 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
   };
 
   return (
-    <div 
-      id="ai-assistant-panel" 
+    <div
+      id="ai-assistant-panel"
       className={`flex flex-col overflow-hidden transition-all duration-300 relative ${panelHeightClass} ${panelBg}`}
     >
       {/* 1. TOP HEADER & NAVIGATION CONTROL RAIL */}
@@ -473,9 +537,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
             <div className="p-1 bg-emerald-500/20 rounded text-emerald-400">
               <Sparkles className="w-4 h-4 animate-pulse" />
             </div>
-            <h3 className="text-xs font-black tracking-wider uppercase">
-              LandCraft AI Assistant Workbench
-            </h3>
+            <h3 className="text-xs font-black tracking-wider uppercase">LandCraft AI Assistant Workbench</h3>
           </div>
 
           {/* Tab Selection */}
@@ -528,12 +590,16 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
         {/* Workbench Sizing Trigger */}
         <div className="flex items-center gap-3">
           <span className="text-[10px] text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded border border-slate-700/30">
-            {activeTab === 'generator' ? 'Text-to-Floor-Plan Model' : activeTab === 'photo' ? 'Image-to-Plan Model' : 'Active Compliance Diagnostics'}
+            {activeTab === 'generator'
+              ? 'Text-to-Floor-Plan Model'
+              : activeTab === 'photo'
+                ? 'Image-to-Plan Model'
+                : 'Active Compliance Diagnostics'}
           </span>
           <button
             onClick={() => setIsExpanded(!isExpanded)}
             className="p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer"
-            title={isExpanded ? "Collapse Workbench" : "Expand Workbench"}
+            title={isExpanded ? 'Collapse Workbench' : 'Expand Workbench'}
           >
             {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
           </button>
@@ -559,13 +625,11 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
       {/* 2. MAIN ACTIVE TAB WORKSPACE PANEL */}
       {isExpanded && (
         <div className="flex-1 overflow-hidden flex flex-col">
-          
           {/* TAB A: AI DESIGN GENERATOR */}
           {activeTab === 'generator' && (
             <div className="flex-1 overflow-hidden flex flex-col md:flex-row divide-y md:divide-y-0 md:divide-x divide-slate-800/80">
-              
               {/* LEFT FRAME: GENERATION INPUT FORM & PROMPTS */}
-              <form 
+              <form
                 onSubmit={handleGenerateAIPlan}
                 className="w-full md:w-[45%] p-4 overflow-y-auto space-y-4 flex flex-col justify-between"
               >
@@ -576,7 +640,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                       Input & Demonstrations Presets (1-Click Fill)
                     </label>
                     <div className="flex flex-wrap gap-2">
-                      {DEMONSTRATIONS.map(demo => (
+                      {DEMONSTRATIONS.map((demo) => (
                         <button
                           key={demo.id}
                           type="button"
@@ -592,14 +656,18 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                   {/* Prompt Text Input */}
                   <div className="space-y-1">
                     <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">
-                      {activeTab === 'generator' ? 'Custom Design Brief (Natural Language Request)' : 'Context & Hints (e.g., North direction, nice views)'}
+                      {activeTab === 'generator'
+                        ? 'Custom Design Brief (Natural Language Request)'
+                        : 'Context & Hints (e.g., North direction, nice views)'}
                     </label>
                     <textarea
                       value={promptInput}
                       onChange={(e) => setPromptInput(e.target.value)}
-                      placeholder={activeTab === 'generator' 
-                        ? "e.g. A Scandinavian bungalow with a wrap-around kitchen deck, separate mudroom entry, and compact private ensuite master bedroom..."
-                        : "e.g. The street is at the bottom of the photo. Beautiful views to the top-right."}
+                      placeholder={
+                        activeTab === 'generator'
+                          ? 'e.g. A Scandinavian bungalow with a wrap-around kitchen deck, separate mudroom entry, and compact private ensuite master bedroom...'
+                          : 'e.g. The street is at the bottom of the photo. Beautiful views to the top-right.'
+                      }
                       className="w-full h-18 px-3 py-2 text-xs rounded border border-slate-700 bg-slate-950/80 focus:border-emerald-500 focus:outline-none placeholder-slate-500 text-slate-100 leading-normal resize-none"
                     />
                   </div>
@@ -644,8 +712,10 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                         onChange={(e) => setBedrooms(parseInt(e.target.value))}
                         className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100 focus:outline-none"
                       >
-                        {[1, 2, 3, 4, 5].map(n => (
-                          <option key={n} value={n}>{n} Bedroom{n > 1 ? 's' : ''}</option>
+                        {[1, 2, 3, 4, 5].map((n) => (
+                          <option key={n} value={n}>
+                            {n} Bedroom{n > 1 ? 's' : ''}
+                          </option>
                         ))}
                       </select>
                     </div>
@@ -658,8 +728,10 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                         onChange={(e) => setBathrooms(parseInt(e.target.value))}
                         className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100 focus:outline-none"
                       >
-                        {[1, 1.5, 2, 2.5, 3].map(n => (
-                          <option key={n} value={n}>{n} Bathroom{n > 1 ? 's' : ''}</option>
+                        {[1, 1.5, 2, 2.5, 3].map((n) => (
+                          <option key={n} value={n}>
+                            {n} Bathroom{n > 1 ? 's' : ''}
+                          </option>
                         ))}
                       </select>
                     </div>
@@ -674,8 +746,10 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                         onChange={(e) => setStyle(e.target.value)}
                         className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100 focus:outline-none"
                       >
-                        {["Modern", "Scandinavian", "Minimalist", "Traditional", "Brutalist"].map(s => (
-                          <option key={s} value={s}>{s}</option>
+                        {['Modern', 'Scandinavian', 'Minimalist', 'Traditional', 'Brutalist'].map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
                         ))}
                       </select>
                     </div>
@@ -704,7 +778,9 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                     className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-slate-950 text-xs font-bold py-2 px-4 rounded-md transition-colors cursor-pointer flex items-center justify-center gap-2 shadow"
                   >
                     <Sliders className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
-                    <span>{isGenerating ? "Drafting Blueprint Layouts..." : "Generate AI Blueprint Options"}</span>
+                    <span>
+                      {isGenerating ? 'Drafting Blueprint Layouts...' : 'Generate AI Blueprint Options'}
+                    </span>
                   </button>
                   <span className="text-[8px] text-slate-400 block text-center mt-1.5 font-medium leading-relaxed uppercase tracking-wider border border-slate-800/60 rounded p-1 bg-slate-900/40">
                     ⚠️ Conceptual design only - requires licensed professional review.
@@ -714,7 +790,6 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
 
               {/* RIGHT FRAME: AI DESIGN FEEDBACK & VARIANT VIEWER */}
               <div className="flex-1 p-4 overflow-y-auto flex flex-col justify-between">
-                
                 {/* 1. INITIAL PLACEHOLDER STATE */}
                 {!isGenerating && generatedVariants.length === 0 && !errorMsg && (
                   <div className="flex-1 flex flex-col items-center justify-center text-center p-6 space-y-3">
@@ -724,7 +799,8 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                     <div className="space-y-1">
                       <p className="text-xs font-bold text-slate-300">No Layout Generated Yet</p>
                       <p className="text-[10px] text-slate-400 max-w-xs leading-normal">
-                        Submit your spatial plot size and design requirements. The AI will coordinate walls, windows, and custom furniture placements.
+                        Submit your spatial plot size and design requirements. The AI will coordinate walls,
+                        windows, and custom furniture placements.
                       </p>
                     </div>
                   </div>
@@ -742,7 +818,9 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                       <div className="bg-emerald-950/20 text-emerald-400 text-[10px] font-mono px-3 py-1.5 rounded border border-emerald-900/30 max-w-xs mx-auto animate-pulse leading-snug">
                         {loadingPhase}
                       </div>
-                      <p className="text-[9px] text-slate-500 italic">This usually completes in 4 to 8 seconds</p>
+                      <p className="text-[9px] text-slate-500 italic">
+                        This usually completes in 4 to 8 seconds
+                      </p>
                     </div>
                   </div>
                 )}
@@ -771,7 +849,6 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                 {/* 4. DESIGN VARIANT LAYOUT BOARD */}
                 {generatedVariants.length > 0 && (
                   <div className="flex-1 flex flex-col overflow-hidden">
-                    
                     {/* Variant Selector Headers */}
                     <div className="flex items-center gap-2 border-b border-slate-800 pb-2.5 shrink-0">
                       <span className="text-[9px] uppercase tracking-wider text-slate-400 font-extrabold mr-1">
@@ -800,16 +877,22 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                       <div className="flex items-start justify-between gap-4">
                         <div>
                           <h4 className="text-xs font-black text-emerald-400 tracking-tight leading-snug">
-                            {generatedVariants[selectedVariantIdx].name || `Variant Layout ${selectedVariantIdx + 1}`}
+                            {generatedVariants[selectedVariantIdx].name ||
+                              `Variant Layout ${selectedVariantIdx + 1}`}
                           </h4>
                           <div className="flex items-center gap-2 mt-0.5 text-[9px] font-mono text-slate-400">
                             <span className="bg-slate-800 px-1 rounded font-bold uppercase text-slate-300">
                               {style}
                             </span>
                             <span>&bull;</span>
-                            <span>Plot: {generatedVariants[selectedVariantIdx].dimensions?.widthMeters}m x {generatedVariants[selectedVariantIdx].dimensions?.lengthMeters}m</span>
+                            <span>
+                              Plot: {generatedVariants[selectedVariantIdx].dimensions?.widthMeters}m x{' '}
+                              {generatedVariants[selectedVariantIdx].dimensions?.lengthMeters}m
+                            </span>
                             <span>&bull;</span>
-                            <span className="text-emerald-400 font-bold">Area: {generatedVariants[selectedVariantIdx].dimensions?.totalBuildAreaM2} m²</span>
+                            <span className="text-emerald-400 font-bold">
+                              Area: {generatedVariants[selectedVariantIdx].dimensions?.totalBuildAreaM2} m²
+                            </span>
                           </div>
                         </div>
 
@@ -830,28 +913,44 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                           <button
                             type="button"
                             onClick={() => setRationaleSubTab('concept')}
-                            className={rationaleSubTab === 'concept' ? 'text-emerald-400 border-b border-emerald-400' : 'hover:text-slate-200'}
+                            className={
+                              rationaleSubTab === 'concept'
+                                ? 'text-emerald-400 border-b border-emerald-400'
+                                : 'hover:text-slate-200'
+                            }
                           >
                             Design Concept
                           </button>
                           <button
                             type="button"
                             onClick={() => setRationaleSubTab('zoning')}
-                            className={rationaleSubTab === 'zoning' ? 'text-emerald-400 border-b border-emerald-400' : 'hover:text-slate-200'}
+                            className={
+                              rationaleSubTab === 'zoning'
+                                ? 'text-emerald-400 border-b border-emerald-400'
+                                : 'hover:text-slate-200'
+                            }
                           >
                             Zoning Logic
                           </button>
                           <button
                             type="button"
                             onClick={() => setRationaleSubTab('flow')}
-                            className={rationaleSubTab === 'flow' ? 'text-emerald-400 border-b border-emerald-400' : 'hover:text-slate-200'}
+                            className={
+                              rationaleSubTab === 'flow'
+                                ? 'text-emerald-400 border-b border-emerald-400'
+                                : 'hover:text-slate-200'
+                            }
                           >
                             Circulation Flow
                           </button>
                           <button
                             type="button"
                             onClick={() => setRationaleSubTab('light')}
-                            className={rationaleSubTab === 'light' ? 'text-emerald-400 border-b border-emerald-400' : 'hover:text-slate-200'}
+                            className={
+                              rationaleSubTab === 'light'
+                                ? 'text-emerald-400 border-b border-emerald-400'
+                                : 'hover:text-slate-200'
+                            }
                           >
                             Daylighting & Vents
                           </button>
@@ -860,16 +959,28 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                         {/* Rationale content display */}
                         <div className="text-[10px] leading-relaxed text-slate-300 font-medium">
                           {rationaleSubTab === 'concept' && (
-                            <p>{generatedVariants[selectedVariantIdx].rationale?.architecturalConcept || "A detailed conceptual setup outlining window orientation, zoning spacing, and furniture density ratios."}</p>
+                            <p>
+                              {generatedVariants[selectedVariantIdx].rationale?.architecturalConcept ||
+                                'A detailed conceptual setup outlining window orientation, zoning spacing, and furniture density ratios.'}
+                            </p>
                           )}
                           {rationaleSubTab === 'zoning' && (
-                            <p>{generatedVariants[selectedVariantIdx].rationale?.zoningRationale || "A clear explanation of the public social living areas versus private personal bedrooms."}</p>
+                            <p>
+                              {generatedVariants[selectedVariantIdx].rationale?.zoningRationale ||
+                                'A clear explanation of the public social living areas versus private personal bedrooms.'}
+                            </p>
                           )}
                           {rationaleSubTab === 'flow' && (
-                            <p>{generatedVariants[selectedVariantIdx].rationale?.circulationFlow || "Analyses of corridors, entrance doors, and safety escape layouts."}</p>
+                            <p>
+                              {generatedVariants[selectedVariantIdx].rationale?.circulationFlow ||
+                                'Analyses of corridors, entrance doors, and safety escape layouts.'}
+                            </p>
                           )}
                           {rationaleSubTab === 'light' && (
-                            <p>{generatedVariants[selectedVariantIdx].rationale?.naturalLightAndVents || "Explores cross-ventilation rules and southern exposures for energy savings."}</p>
+                            <p>
+                              {generatedVariants[selectedVariantIdx].rationale?.naturalLightAndVents ||
+                                'Explores cross-ventilation rules and southern exposures for energy savings.'}
+                            </p>
                           )}
                         </div>
                       </div>
@@ -884,7 +995,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
           {activeTab === 'photo' && (
             <div className="flex-1 overflow-hidden flex flex-col md:flex-row divide-y md:divide-y-0 md:divide-x divide-slate-800/80">
               {/* LEFT FRAME: UPLOAD & SETTINGS */}
-              <form 
+              <form
                 onSubmit={handleGenerateFromPhoto}
                 className="w-full md:w-[45%] p-4 overflow-y-auto space-y-4 flex flex-col justify-between"
               >
@@ -895,15 +1006,19 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                       Plot Photo Upload
                     </label>
                     <div className="relative border-2 border-dashed border-slate-700 bg-slate-900/50 rounded-lg p-4 text-center hover:bg-slate-800/50 transition-colors">
-                      <input 
-                        type="file" 
-                        accept="image/*" 
+                      <input
+                        type="file"
+                        accept="image/*"
                         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                         onChange={handlePhotoFileChange}
                       />
                       {photoPreview ? (
                         <div className="relative h-24 w-full flex items-center justify-center overflow-hidden rounded">
-                          <img src={photoPreview} alt="Plot preview" className="object-cover max-h-full max-w-full rounded" />
+                          <img
+                            src={photoPreview}
+                            alt="Plot preview"
+                            className="object-cover max-h-full max-w-full rounded"
+                          />
                         </div>
                       ) : (
                         <div className="flex flex-col items-center justify-center space-y-2 py-2">
@@ -930,36 +1045,84 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                   {/* Grid of structured criteria fields */}
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
-                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Plot Width (m)</label>
-                      <input type="number" value={plotWidth} onChange={(e) => setPlotWidth(Math.max(5, parseInt(e.target.value) || 0))} className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100" />
+                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">
+                        Plot Width (m)
+                      </label>
+                      <input
+                        type="number"
+                        value={plotWidth}
+                        onChange={(e) => setPlotWidth(Math.max(5, parseInt(e.target.value) || 0))}
+                        className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100"
+                      />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Plot Length (m)</label>
-                      <input type="number" value={plotLength} onChange={(e) => setPlotLength(Math.max(5, parseInt(e.target.value) || 0))} className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100" />
+                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">
+                        Plot Length (m)
+                      </label>
+                      <input
+                        type="number"
+                        value={plotLength}
+                        onChange={(e) => setPlotLength(Math.max(5, parseInt(e.target.value) || 0))}
+                        className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100"
+                      />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Bedrooms</label>
-                      <select value={bedrooms} onChange={(e) => setBedrooms(parseInt(e.target.value))} className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100 focus:outline-none">
-                        {[1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Bathrooms</label>
-                      <select value={bathrooms} onChange={(e) => setBathrooms(parseInt(e.target.value))} className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100 focus:outline-none">
-                        {[1, 1.5, 2, 2.5, 3].map(n => <option key={n} value={n}>{n}</option>)}
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Style</label>
-                      <select value={style} onChange={(e) => setStyle(e.target.value)} className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100 focus:outline-none">
-                        {["Modern", "Scandinavian", "Minimalist", "Traditional", "Brutalist"].map(s => (
-                          <option key={s} value={s}>{s}</option>
+                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">
+                        Bedrooms
+                      </label>
+                      <select
+                        value={bedrooms}
+                        onChange={(e) => setBedrooms(parseInt(e.target.value))}
+                        className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100 focus:outline-none"
+                      >
+                        {[1, 2, 3, 4, 5].map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
                         ))}
                       </select>
                     </div>
                     <div className="space-y-1">
-                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">Variants</label>
-                      <select value={variantsCount} onChange={(e) => setVariantsCount(parseInt(e.target.value))} className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100 focus:outline-none text-blue-400 font-bold">
+                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">
+                        Bathrooms
+                      </label>
+                      <select
+                        value={bathrooms}
+                        onChange={(e) => setBathrooms(parseInt(e.target.value))}
+                        className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100 focus:outline-none"
+                      >
+                        {[1, 1.5, 2, 2.5, 3].map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">
+                        Style
+                      </label>
+                      <select
+                        value={style}
+                        onChange={(e) => setStyle(e.target.value)}
+                        className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100 focus:outline-none"
+                      >
+                        {['Modern', 'Scandinavian', 'Minimalist', 'Traditional', 'Brutalist'].map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase tracking-wider text-slate-400 font-bold block">
+                        Variants
+                      </label>
+                      <select
+                        value={variantsCount}
+                        onChange={(e) => setVariantsCount(parseInt(e.target.value))}
+                        className="w-full px-2 py-1 text-xs rounded border border-slate-700 bg-slate-950 text-slate-100 focus:outline-none text-blue-400 font-bold"
+                      >
                         <option value={1}>1 Option</option>
                         <option value={2}>2 Options</option>
                         <option value={3}>3 Options</option>
@@ -975,15 +1138,18 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                     disabled={isGenerating || !photoPreview}
                     className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-bold py-2 px-4 rounded-md transition-colors cursor-pointer flex items-center justify-center gap-2 shadow"
                   >
-                    {isGenerating ? <Sliders className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
-                    <span>{isGenerating ? "Analyzing Image..." : "Analyze & Generate Plan"}</span>
+                    {isGenerating ? (
+                      <Sliders className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Camera className="w-3.5 h-3.5" />
+                    )}
+                    <span>{isGenerating ? 'Analyzing Image...' : 'Analyze & Generate Plan'}</span>
                   </button>
                 </div>
               </form>
 
               {/* RIGHT FRAME: AI DESIGN FEEDBACK & VARIANT VIEWER */}
               <div className="flex-1 p-4 overflow-y-auto flex flex-col justify-between">
-                
                 {/* 1. INITIAL PLACEHOLDER STATE */}
                 {!isGenerating && generatedVariants.length === 0 && !errorMsg && (
                   <div className="flex-1 flex flex-col items-center justify-center text-center p-6 space-y-3">
@@ -993,7 +1159,8 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                     <div className="space-y-1">
                       <p className="text-xs font-bold text-slate-300">Awaiting Plot Photo</p>
                       <p className="text-[10px] text-slate-400 max-w-xs leading-normal">
-                        Upload an image of your land, map segment, or rough sketch. AI will assess dimensions and visual context to map out an optimized floor plan.
+                        Upload an image of your land, map segment, or rough sketch. AI will assess dimensions
+                        and visual context to map out an optimized floor plan.
                       </p>
                     </div>
                   </div>
@@ -1067,16 +1234,22 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                       <div className="flex items-start justify-between gap-4">
                         <div>
                           <h4 className="text-xs font-black text-blue-400 tracking-tight leading-snug">
-                            {generatedVariants[selectedVariantIdx].name || `Vision Layout ${selectedVariantIdx + 1}`}
+                            {generatedVariants[selectedVariantIdx].name ||
+                              `Vision Layout ${selectedVariantIdx + 1}`}
                           </h4>
                           <div className="flex items-center gap-2 mt-0.5 text-[9px] font-mono text-slate-400">
                             <span className="bg-slate-800 px-1 rounded font-bold uppercase text-slate-300">
                               {style}
                             </span>
                             <span>&bull;</span>
-                            <span>Plot: {generatedVariants[selectedVariantIdx].dimensions?.widthMeters}m x {generatedVariants[selectedVariantIdx].dimensions?.lengthMeters}m</span>
+                            <span>
+                              Plot: {generatedVariants[selectedVariantIdx].dimensions?.widthMeters}m x{' '}
+                              {generatedVariants[selectedVariantIdx].dimensions?.lengthMeters}m
+                            </span>
                             <span>&bull;</span>
-                            <span className="text-blue-400 font-bold">Area: {generatedVariants[selectedVariantIdx].dimensions?.totalBuildAreaM2} m²</span>
+                            <span className="text-blue-400 font-bold">
+                              Area: {generatedVariants[selectedVariantIdx].dimensions?.totalBuildAreaM2} m²
+                            </span>
                           </div>
                         </div>
 
@@ -1094,16 +1267,76 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                       {/* Vision Insights Tab Bar */}
                       <div className="space-y-2 bg-slate-950/40 p-2.5 rounded border border-slate-800/80">
                         <div className="flex border-b border-slate-800 pb-1.5 gap-2.5 overflow-x-auto text-[9px] font-bold text-slate-400">
-                          <button type="button" onClick={() => setRationaleSubTab('concept')} className={rationaleSubTab === 'concept' ? 'text-blue-400 border-b border-blue-400' : 'hover:text-slate-200'}>Design Concept</button>
-                          <button type="button" onClick={() => setRationaleSubTab('zoning')} className={rationaleSubTab === 'zoning' ? 'text-blue-400 border-b border-blue-400' : 'hover:text-slate-200'}>Zoning Logic</button>
-                          <button type="button" onClick={() => setRationaleSubTab('flow')} className={rationaleSubTab === 'flow' ? 'text-blue-400 border-b border-blue-400' : 'hover:text-slate-200'}>Circulation Flow</button>
-                          <button type="button" onClick={() => setRationaleSubTab('light')} className={rationaleSubTab === 'light' ? 'text-blue-400 border-b border-blue-400' : 'hover:text-slate-200'}>Light & Vents</button>
+                          <button
+                            type="button"
+                            onClick={() => setRationaleSubTab('concept')}
+                            className={
+                              rationaleSubTab === 'concept'
+                                ? 'text-blue-400 border-b border-blue-400'
+                                : 'hover:text-slate-200'
+                            }
+                          >
+                            Design Concept
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRationaleSubTab('zoning')}
+                            className={
+                              rationaleSubTab === 'zoning'
+                                ? 'text-blue-400 border-b border-blue-400'
+                                : 'hover:text-slate-200'
+                            }
+                          >
+                            Zoning Logic
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRationaleSubTab('flow')}
+                            className={
+                              rationaleSubTab === 'flow'
+                                ? 'text-blue-400 border-b border-blue-400'
+                                : 'hover:text-slate-200'
+                            }
+                          >
+                            Circulation Flow
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRationaleSubTab('light')}
+                            className={
+                              rationaleSubTab === 'light'
+                                ? 'text-blue-400 border-b border-blue-400'
+                                : 'hover:text-slate-200'
+                            }
+                          >
+                            Light & Vents
+                          </button>
                         </div>
                         <div className="text-[10px] leading-relaxed text-slate-300 font-medium">
-                          {rationaleSubTab === 'concept' && <p>{generatedVariants[selectedVariantIdx].rationale?.architecturalConcept || "Concept setup."}</p>}
-                          {rationaleSubTab === 'zoning' && <p>{generatedVariants[selectedVariantIdx].rationale?.zoningRationale || "Zoning setup."}</p>}
-                          {rationaleSubTab === 'flow' && <p>{generatedVariants[selectedVariantIdx].rationale?.circulationFlow || "Flow analyses."}</p>}
-                          {rationaleSubTab === 'light' && <p>{generatedVariants[selectedVariantIdx].rationale?.naturalLightAndVents || "Vents."}</p>}
+                          {rationaleSubTab === 'concept' && (
+                            <p>
+                              {generatedVariants[selectedVariantIdx].rationale?.architecturalConcept ||
+                                'Concept setup.'}
+                            </p>
+                          )}
+                          {rationaleSubTab === 'zoning' && (
+                            <p>
+                              {generatedVariants[selectedVariantIdx].rationale?.zoningRationale ||
+                                'Zoning setup.'}
+                            </p>
+                          )}
+                          {rationaleSubTab === 'flow' && (
+                            <p>
+                              {generatedVariants[selectedVariantIdx].rationale?.circulationFlow ||
+                                'Flow analyses.'}
+                            </p>
+                          )}
+                          {rationaleSubTab === 'light' && (
+                            <p>
+                              {generatedVariants[selectedVariantIdx].rationale?.naturalLightAndVents ||
+                                'Vents.'}
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1119,7 +1352,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
               {/* Category Filter bar */}
               <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800/80 bg-slate-950/20 shrink-0">
                 <div className="flex items-center gap-1.5 overflow-x-auto">
-                  {(['all', 'structure', 'flow', 'accessibility', 'safety'] as const).map(cat => (
+                  {(['all', 'structure', 'flow', 'accessibility', 'safety'] as const).map((cat) => (
                     <button
                       key={cat}
                       onClick={() => setSelectedCategory(cat)}
@@ -1147,10 +1380,12 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                     <Lightbulb className="w-4 h-4 text-blue-400" />
                     <div>
                       <p className="text-xs font-bold text-blue-200">AI Optimization Available</p>
-                      <p className="text-[10px] text-blue-300">The architect AI has generated a modified layout to resolve the identified issues.</p>
+                      <p className="text-[10px] text-blue-300">
+                        The architect AI has generated a modified layout to resolve the identified issues.
+                      </p>
                     </div>
                   </div>
-                  <button 
+                  <button
                     onClick={() => {
                       if (onLoadPlan) {
                         onLoadPlan(optimizedPlan);
@@ -1171,52 +1406,63 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                   <div className="col-span-full flex flex-col items-center justify-center py-8 text-center text-slate-400">
                     <CheckCircle2 className="w-8 h-8 text-slate-600 mb-2" />
                     <p className="text-xs font-bold">All clear for this filter category</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">No critical warnings or code violations are registered.</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      No critical warnings or code violations are registered.
+                    </p>
                   </div>
                 ) : (
                   filteredReviews.map((item) => {
                     let Icon = Info;
-                    let cardStyle = "border-slate-800 bg-slate-800/30 text-slate-200";
-                    let tagStyle = "bg-slate-800 text-slate-400";
-                    
+                    let cardStyle = 'border-slate-800 bg-slate-800/30 text-slate-200';
+                    let tagStyle = 'bg-slate-800 text-slate-400';
+
                     if (item.type === 'error') {
                       Icon = ShieldAlert;
-                      cardStyle = "border-red-950/40 bg-red-950/10 text-red-200";
-                      tagStyle = "bg-red-950/40 text-red-400 border border-red-900/30";
+                      cardStyle = 'border-red-950/40 bg-red-950/10 text-red-200';
+                      tagStyle = 'bg-red-950/40 text-red-400 border border-red-900/30';
                     } else if (item.type === 'warning') {
                       Icon = AlertTriangle;
-                      cardStyle = "border-amber-950/40 bg-amber-950/10 text-amber-200";
-                      tagStyle = "bg-amber-950/40 text-amber-400 border border-amber-900/30";
+                      cardStyle = 'border-amber-950/40 bg-amber-950/10 text-amber-200';
+                      tagStyle = 'bg-amber-950/40 text-amber-400 border border-amber-900/30';
                     } else if (item.type === 'success') {
                       Icon = CheckCircle2;
-                      cardStyle = "border-emerald-950/40 bg-emerald-950/10 text-emerald-200";
-                      tagStyle = "bg-emerald-950/40 text-emerald-400 border border-emerald-900/30";
+                      cardStyle = 'border-emerald-950/40 bg-emerald-950/10 text-emerald-200';
+                      tagStyle = 'bg-emerald-950/40 text-emerald-400 border border-emerald-900/30';
                     } else if (item.type === 'info') {
                       Icon = Lightbulb;
-                      cardStyle = "border-blue-950/40 bg-blue-950/10 text-blue-200";
-                      tagStyle = "bg-blue-950/40 text-blue-400 border border-blue-900/30";
+                      cardStyle = 'border-blue-950/40 bg-blue-950/10 text-blue-200';
+                      tagStyle = 'bg-blue-950/40 text-blue-400 border border-blue-900/30';
                     }
 
                     if (highContrast) {
-                      cardStyle = "border-black bg-white text-black border";
-                      tagStyle = "bg-black text-white";
+                      cardStyle = 'border-black bg-white text-black border';
+                      tagStyle = 'bg-black text-white';
                     }
 
                     return (
-                      <div 
-                        key={item.id} 
+                      <div
+                        key={item.id}
                         className={`p-3 rounded-lg border flex gap-2.5 items-start transition-all hover:scale-[1.01] ${cardStyle}`}
                       >
-                        <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${
-                          highContrast ? 'text-black' : 
-                          item.type === 'error' ? 'text-red-400' :
-                          item.type === 'warning' ? 'text-amber-400' :
-                          item.type === 'success' ? 'text-emerald-400' : 'text-blue-400'
-                        }`} />
+                        <Icon
+                          className={`w-4 h-4 mt-0.5 shrink-0 ${
+                            highContrast
+                              ? 'text-black'
+                              : item.type === 'error'
+                                ? 'text-red-400'
+                                : item.type === 'warning'
+                                  ? 'text-amber-400'
+                                  : item.type === 'success'
+                                    ? 'text-emerald-400'
+                                    : 'text-blue-400'
+                          }`}
+                        />
                         <div className="space-y-1">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-bold text-[11px] leading-tight">{item.title}</span>
-                            <span className={`text-[8px] uppercase tracking-wider px-1 rounded font-bold ${tagStyle}`}>
+                            <span
+                              className={`text-[8px] uppercase tracking-wider px-1 rounded font-bold ${tagStyle}`}
+                            >
                               {item.category}
                             </span>
                           </div>
@@ -1231,7 +1477,6 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
               </div>
             </div>
           )}
-
         </div>
       )}
     </div>

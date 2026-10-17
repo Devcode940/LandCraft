@@ -48,8 +48,8 @@ export default class ErrorBoundary extends React.Component<Props, State> {
             <h1 className="text-base font-bold">Something went wrong</h1>
           </div>
           <p className="text-xs text-slate-400 leading-relaxed mb-4">
-            LandCraft hit an unexpected error while drawing the editor. Your plan may not be saved — if you have an
-            exported JSON copy, you can reload and re-open it.
+            LandCraft hit an unexpected error while drawing the editor. Your plan may not be saved — if you
+            have an exported JSON copy, you can reload and re-open it.
           </p>
           <pre className="text-[10px] font-mono bg-slate-950 border border-slate-800 rounded-lg p-3 overflow-auto max-h-40 text-slate-500 whitespace-pre-wrap">
             {error.message}

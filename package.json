@@ -13,8 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"*.{ts,json,md}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"*.{ts,json,md}\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"server/**/*.ts\" \"{server,vite}.ts\" \"*.json\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"server/**/*.ts\" \"{server,vite}.ts\" \"*.json\"",
     "verify": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
@@ -26,9 +26,11 @@
     "@tailwindcss/vite": "^4.1.14",
     "@types/three": "^0.184.1",
     "@vitejs/plugin-react": "^5.0.4",
+    "compression": "^1.8.2",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
+    "helmet": "^8.3.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",
@@ -39,6 +41,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/compression": "^1.8.1",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react-dom": "^19.3.0",

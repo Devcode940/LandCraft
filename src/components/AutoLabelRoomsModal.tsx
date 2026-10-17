@@ -4,18 +4,7 @@
  */
 
 import { useState } from 'react';
-import { 
-  Sparkles, 
-  X, 
-  Check, 
-  ArrowRight, 
-  Tv, 
-  Bed, 
-  Bath, 
-  Utensils, 
-  Square, 
-  AlertCircle
-} from 'lucide-react';
+import { Sparkles, X, Check, ArrowRight, Tv, Bed, Bath, Utensils, Square, AlertCircle } from 'lucide-react';
 import { FloorPlanData, DimensionUnit } from '../types';
 import { suggestAllRooms, RoomSuggestion } from '../utils/roomAutoLabeler';
 
@@ -32,14 +21,14 @@ export default function AutoLabelRoomsModal({
   unit,
   highContrast,
   onApplyLabels,
-  onClose
+  onClose,
 }: AutoLabelRoomsModalProps) {
   const suggestions: RoomSuggestion[] = suggestAllRooms(plan.rooms, plan.furniture, unit);
 
   // Custom selected choices per room
   const [selectedLabels, setSelectedLabels] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
-    suggestions.forEach(s => {
+    suggestions.forEach((s) => {
       initial[s.roomId] = s.suggestedName;
     });
     return initial;
@@ -48,7 +37,7 @@ export default function AutoLabelRoomsModal({
   // Track which rooms are checked for batch apply
   const [checkedRoomIds, setCheckedRoomIds] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
-    suggestions.forEach(s => {
+    suggestions.forEach((s) => {
       // Auto-check if current label does not already match suggestion
       initial[s.roomId] = !s.currentMatchesSuggestion || s.isGenericLabel;
     });
@@ -56,20 +45,20 @@ export default function AutoLabelRoomsModal({
   });
 
   const handleSelectChoice = (roomId: string, name: string) => {
-    setSelectedLabels(prev => ({ ...prev, [roomId]: name }));
-    setCheckedRoomIds(prev => ({ ...prev, [roomId]: true }));
+    setSelectedLabels((prev) => ({ ...prev, [roomId]: name }));
+    setCheckedRoomIds((prev) => ({ ...prev, [roomId]: true }));
   };
 
   const toggleCheck = (roomId: string) => {
-    setCheckedRoomIds(prev => ({ ...prev, [roomId]: !prev[roomId] }));
+    setCheckedRoomIds((prev) => ({ ...prev, [roomId]: !prev[roomId] }));
   };
 
   const handleApplySelected = () => {
     const updates = suggestions
-      .filter(s => checkedRoomIds[s.roomId])
-      .map(s => ({
+      .filter((s) => checkedRoomIds[s.roomId])
+      .map((s) => ({
         id: s.roomId,
-        label: selectedLabels[s.roomId] || s.suggestedName
+        label: selectedLabels[s.roomId] || s.suggestedName,
       }));
     if (updates.length > 0) {
       onApplyLabels(updates);
@@ -78,7 +67,7 @@ export default function AutoLabelRoomsModal({
   };
 
   const handleApplySingle = (roomId: string) => {
-    const label = selectedLabels[roomId] || suggestions.find(s => s.roomId === roomId)?.suggestedName;
+    const label = selectedLabels[roomId] || suggestions.find((s) => s.roomId === roomId)?.suggestedName;
     if (label) {
       onApplyLabels([{ id: roomId, label }]);
     }
@@ -86,11 +75,16 @@ export default function AutoLabelRoomsModal({
 
   const getCategoryIcon = (category: string) => {
     switch (category) {
-      case 'bedroom': return Bed;
-      case 'bathroom': return Bath;
-      case 'kitchen': return Utensils;
-      case 'living': return Tv;
-      default: return Square;
+      case 'bedroom':
+        return Bed;
+      case 'bathroom':
+        return Bath;
+      case 'kitchen':
+        return Utensils;
+      case 'living':
+        return Tv;
+      default:
+        return Square;
     }
   };
 
@@ -102,14 +96,16 @@ export default function AutoLabelRoomsModal({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
-      <div 
+      <div
         className={`w-full max-w-2xl rounded-2xl overflow-hidden flex flex-col max-h-[85vh] ${modalBg}`}
         id="auto-label-rooms-modal"
       >
         {/* Modal Header */}
-        <div className={`p-4 sm:p-5 flex items-center justify-between border-b ${
-          highContrast ? 'border-black bg-gray-50' : 'border-slate-800 bg-slate-950/60'
-        }`}>
+        <div
+          className={`p-4 sm:p-5 flex items-center justify-between border-b ${
+            highContrast ? 'border-black bg-gray-50' : 'border-slate-800 bg-slate-950/60'
+          }`}
+        >
           <div className="flex items-center gap-3">
             <div className="p-2.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 rounded-xl">
               <Sparkles className="w-5 h-5" />
@@ -122,7 +118,8 @@ export default function AutoLabelRoomsModal({
                 </span>
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                A deterministic rule engine: it scores room dimensions, aspect ratio, and the furniture placed inside each boundary to infer architectural names. No AI model is called.
+                A deterministic rule engine: it scores room dimensions, aspect ratio, and the furniture placed
+                inside each boundary to infer architectural names. No AI model is called.
               </p>
             </div>
           </div>
@@ -157,7 +154,9 @@ export default function AutoLabelRoomsModal({
                   key={s.roomId}
                   className={`p-3.5 sm:p-4 rounded-xl border transition-all ${
                     highContrast
-                      ? isChecked ? 'border-2 border-black bg-gray-50' : 'border border-gray-300'
+                      ? isChecked
+                        ? 'border-2 border-black bg-gray-50'
+                        : 'border border-gray-300'
                       : isChecked
                         ? 'border-emerald-500/50 bg-slate-800/70 shadow-sm'
                         : 'border-slate-800 bg-slate-900/60 opacity-80'
@@ -182,15 +181,13 @@ export default function AutoLabelRoomsModal({
                             {s.currentLabel || 'Untitled Room'}
                           </span>
                           <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
-                          <span className="text-sm font-bold text-emerald-400">
-                            {chosenName}
-                          </span>
+                          <span className="text-sm font-bold text-emerald-400">{chosenName}</span>
                           <span
-                          className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold"
-                          title="Heuristic score from the rule engine (0-100). Not a machine-learning probability."
-                        >
-                          {s.confidence}/100 heuristic
-                        </span>
+                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold"
+                            title="Heuristic score from the rule engine (0-100). Not a machine-learning probability."
+                          >
+                            {s.confidence}/100 heuristic
+                          </span>
                           {matchesCurrent && (
                             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 flex items-center gap-1 font-semibold">
                               <Check className="w-2.5 h-2.5" /> Current
@@ -256,7 +253,7 @@ export default function AutoLabelRoomsModal({
                     <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-400 font-mono">
                       <span className="text-slate-500">Inside Boundary:</span>
                       {s.detectedFurniture.map((f) => (
-                        <span 
+                        <span
                           key={f.subType}
                           className="px-1.5 py-0.5 rounded bg-slate-800/90 border border-slate-700 text-slate-300"
                         >
@@ -272,19 +269,24 @@ export default function AutoLabelRoomsModal({
         </div>
 
         {/* Modal Footer */}
-        <div className={`p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 border-t ${
-          highContrast ? 'border-black bg-gray-50' : 'border-slate-800 bg-slate-950/80'
-        }`}>
+        <div
+          className={`p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 border-t ${
+            highContrast ? 'border-black bg-gray-50' : 'border-slate-800 bg-slate-950/80'
+          }`}
+        >
           <div className="flex items-center gap-3 text-xs text-slate-400">
             <span>
-              Selected: <strong className="text-white font-mono">{selectedCount}</strong> of {suggestions.length} rooms
+              Selected: <strong className="text-white font-mono">{selectedCount}</strong> of{' '}
+              {suggestions.length} rooms
             </span>
             <button
               type="button"
               onClick={() => {
                 const allChecked = selectedCount === suggestions.length;
                 const next: Record<string, boolean> = {};
-                suggestions.forEach(s => { next[s.roomId] = !allChecked; });
+                suggestions.forEach((s) => {
+                  next[s.roomId] = !allChecked;
+                });
                 setCheckedRoomIds(next);
               }}
               className="text-emerald-400 hover:underline cursor-pointer font-medium"
@@ -310,7 +312,9 @@ export default function AutoLabelRoomsModal({
               }`}
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Apply {selectedCount} Selected Room{selectedCount === 1 ? '' : 's'}</span>
+              <span>
+                Apply {selectedCount} Selected Room{selectedCount === 1 ? '' : 's'}
+              </span>
             </button>
           </div>
         </div>

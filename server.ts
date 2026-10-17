@@ -5,13 +5,20 @@
 
 import express from 'express';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import { GoogleGenAI, Type } from '@google/genai';
 import { normalizePlan } from './src/utils/normalizePlan';
+import {
+  installCrashHandlers,
+  installGracefulShutdown,
+  installOperations,
+  uptimeSeconds,
+} from './server/operations';
 
 dotenv.config();
+
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -48,17 +55,15 @@ const REQUEST_TIMEOUT_MS = 120_000;
 /** Max accepted image payload (bytes, decoded). ~10 MB. */
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
-const ALLOWED_IMAGE_MIME = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/heic',
-  'image/heif',
-]);
+const ALLOWED_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 
 // ---------------------------------------------------------------------------
 // Middleware
 // ---------------------------------------------------------------------------
+
+// Security headers, compression, request ids and structured request logging.
+// Mounted first so even a rejected request is logged and carries a CSP.
+installOperations(app, IS_PRODUCTION);
 
 // 10 MB is generous for a base64 image plus a prompt; the previous 50 MB let a
 // single request balloon the process heap.
@@ -129,7 +134,8 @@ function normalizeMessages(v: unknown): { role: 'user' | 'model'; text: string }
         const rec = m as Record<string, unknown>;
         const rawRole = typeof rec.role === 'string' ? rec.role.toLowerCase() : '';
         const role = rawRole === 'model' || rawRole === 'assistant' ? 'model' : 'user';
-        const content = typeof rec.content === 'string' ? rec.content : typeof rec.text === 'string' ? rec.text : '';
+        const content =
+          typeof rec.content === 'string' ? rec.content : typeof rec.text === 'string' ? rec.text : '';
         return { role: role as 'user' | 'model', text: cleanText(content, 8000) };
       }
       return null;
@@ -219,40 +225,47 @@ const FLOOR_PLAN_RESPONSE_SCHEMA = {
   properties: {
     name: {
       type: Type.STRING,
-      description: "Descriptive name of this floor plan layout option (e.g., 'Modern Open-Concept 3-Bed Family Bungalow')"
+      description:
+        "Descriptive name of this floor plan layout option (e.g., 'Modern Open-Concept 3-Bed Family Bungalow')",
     },
     rationale: {
       type: Type.OBJECT,
-      description: "Detailed professional design rationale explaining the zoning, traffic flow, and lighting choice.",
+      description:
+        'Detailed professional design rationale explaining the zoning, traffic flow, and lighting choice.',
       properties: {
         architecturalConcept: {
           type: Type.STRING,
-          description: "Summary of the aesthetic and design style requested."
+          description: 'Summary of the aesthetic and design style requested.',
         },
         zoningRationale: {
           type: Type.STRING,
-          description: "Explanation of public vs private separation (e.g., bedrooms placed on private side, living/dining combined for spacious feel)."
+          description:
+            'Explanation of public vs private separation (e.g., bedrooms placed on private side, living/dining combined for spacious feel).',
         },
         circulationFlow: {
           type: Type.STRING,
-          description: "Explanation of entry points, door placements, and unobstructed corridor pathways."
+          description: 'Explanation of entry points, door placements, and unobstructed corridor pathways.',
         },
         naturalLightAndVents: {
           type: Type.STRING,
-          description: "Explanation of windows placements relative to passive solar gain and cross-ventilation."
-        }
+          description:
+            'Explanation of windows placements relative to passive solar gain and cross-ventilation.',
+        },
       },
-      required: ["architecturalConcept", "zoningRationale", "circulationFlow", "naturalLightAndVents"]
+      required: ['architecturalConcept', 'zoningRationale', 'circulationFlow', 'naturalLightAndVents'],
     },
     dimensions: {
       type: Type.OBJECT,
       properties: {
-        widthMeters: { type: Type.NUMBER, description: "Requested plot width in meters" },
-        lengthMeters: { type: Type.NUMBER, description: "Requested plot length in meters" },
-        totalBuildAreaM2: { type: Type.NUMBER, description: "Calculated floor space area of indoor rooms in square meters" },
-        scalePixelsPerMeter: { type: Type.NUMBER, description: "Scale constant: 40" }
+        widthMeters: { type: Type.NUMBER, description: 'Requested plot width in meters' },
+        lengthMeters: { type: Type.NUMBER, description: 'Requested plot length in meters' },
+        totalBuildAreaM2: {
+          type: Type.NUMBER,
+          description: 'Calculated floor space area of indoor rooms in square meters',
+        },
+        scalePixelsPerMeter: { type: Type.NUMBER, description: 'Scale constant: 40' },
       },
-      required: ["widthMeters", "lengthMeters", "totalBuildAreaM2", "scalePixelsPerMeter"]
+      required: ['widthMeters', 'lengthMeters', 'totalBuildAreaM2', 'scalePixelsPerMeter'],
     },
     plan: {
       type: Type.OBJECT,
@@ -262,74 +275,119 @@ const FLOOR_PLAN_RESPONSE_SCHEMA = {
           items: {
             type: Type.OBJECT,
             properties: {
-              id: { type: Type.STRING, description: "Unique string id" },
-              x1: { type: Type.NUMBER, description: "Start X in pixels (multiples of 10 or 20 preferred)" },
-              y1: { type: Type.NUMBER, description: "Start Y in pixels" },
-              x2: { type: Type.NUMBER, description: "End X in pixels" },
-              y2: { type: Type.NUMBER, description: "End Y in pixels" },
-              thickness: { type: Type.NUMBER, description: "Thickness in pixels: 12 for outer perimeter walls, 8 for internal room-divider walls" }
+              id: { type: Type.STRING, description: 'Unique string id' },
+              x1: { type: Type.NUMBER, description: 'Start X in pixels (multiples of 10 or 20 preferred)' },
+              y1: { type: Type.NUMBER, description: 'Start Y in pixels' },
+              x2: { type: Type.NUMBER, description: 'End X in pixels' },
+              y2: { type: Type.NUMBER, description: 'End Y in pixels' },
+              thickness: {
+                type: Type.NUMBER,
+                description:
+                  'Thickness in pixels: 12 for outer perimeter walls, 8 for internal room-divider walls',
+              },
             },
-            required: ["id", "x1", "y1", "x2", "y2", "thickness"]
-          }
+            required: ['id', 'x1', 'y1', 'x2', 'y2', 'thickness'],
+          },
         },
         rooms: {
           type: Type.ARRAY,
           items: {
             type: Type.OBJECT,
             properties: {
-              id: { type: Type.STRING, description: "Unique string id" },
-              x: { type: Type.NUMBER, description: "Top-left X coordinate in pixels" },
-              y: { type: Type.NUMBER, description: "Top-left Y coordinate in pixels" },
-              width: { type: Type.NUMBER, description: "Width in pixels" },
-              height: { type: Type.NUMBER, description: "Height in pixels" },
-              label: { type: Type.STRING, description: "Room label: e.g. 'Master Bedroom', 'Living Area', 'Kitchen & Dining', 'Bathroom', 'Kids Bedroom', 'Entryway'" },
-              color: { type: Type.STRING, description: "Translucent color string: 'rgba(59, 130, 246, 0.08)' for social, 'rgba(16, 185, 129, 0.08)' for personal, 'rgba(245, 158, 11, 0.08)' for bath, 'rgba(107, 114, 128, 0.08)' for entryway/service" }
+              id: { type: Type.STRING, description: 'Unique string id' },
+              x: { type: Type.NUMBER, description: 'Top-left X coordinate in pixels' },
+              y: { type: Type.NUMBER, description: 'Top-left Y coordinate in pixels' },
+              width: { type: Type.NUMBER, description: 'Width in pixels' },
+              height: { type: Type.NUMBER, description: 'Height in pixels' },
+              label: {
+                type: Type.STRING,
+                description:
+                  "Room label: e.g. 'Master Bedroom', 'Living Area', 'Kitchen & Dining', 'Bathroom', 'Kids Bedroom', 'Entryway'",
+              },
+              color: {
+                type: Type.STRING,
+                description:
+                  "Translucent color string: 'rgba(59, 130, 246, 0.08)' for social, 'rgba(16, 185, 129, 0.08)' for personal, 'rgba(245, 158, 11, 0.08)' for bath, 'rgba(107, 114, 128, 0.08)' for entryway/service",
+              },
             },
-            required: ["id", "x", "y", "width", "height", "label", "color"]
-          }
+            required: ['id', 'x', 'y', 'width', 'height', 'label', 'color'],
+          },
         },
         openings: {
           type: Type.ARRAY,
           items: {
             type: Type.OBJECT,
             properties: {
-              id: { type: Type.STRING, description: "Unique string id" },
+              id: { type: Type.STRING, description: 'Unique string id' },
               type: { type: Type.STRING, description: "Must be 'door' or 'window'" },
-              subType: { type: Type.STRING, description: "e.g., 'single', 'double', 'sliding' for doors, or 'standard', 'large', 'bay' for windows" },
-              x: { type: Type.NUMBER, description: "Anchor X in pixels sitting exactly on the associated wall segment line" },
-              y: { type: Type.NUMBER, description: "Anchor Y in pixels sitting exactly on the associated wall segment line" },
-              width: { type: Type.NUMBER, description: "Width in pixels (e.g. 32px for standard doorway, 50px for standard window)" },
-              rotation: { type: Type.NUMBER, description: "Rotation in degrees (0, 90, 180, or 270) matching the wall angle" },
-              wallId: { type: Type.STRING, description: "ID of the wall this opening attaches to" },
-              wallOffset: { type: Type.NUMBER, description: "Ratio along wall (e.g. 0.3 for 30% from start)" },
-              flipSwing: { type: Type.BOOLEAN, description: "Door swing flip (default false)" }
+              subType: {
+                type: Type.STRING,
+                description:
+                  "e.g., 'single', 'double', 'sliding' for doors, or 'standard', 'large', 'bay' for windows",
+              },
+              x: {
+                type: Type.NUMBER,
+                description: 'Anchor X in pixels sitting exactly on the associated wall segment line',
+              },
+              y: {
+                type: Type.NUMBER,
+                description: 'Anchor Y in pixels sitting exactly on the associated wall segment line',
+              },
+              width: {
+                type: Type.NUMBER,
+                description: 'Width in pixels (e.g. 32px for standard doorway, 50px for standard window)',
+              },
+              rotation: {
+                type: Type.NUMBER,
+                description: 'Rotation in degrees (0, 90, 180, or 270) matching the wall angle',
+              },
+              wallId: { type: Type.STRING, description: 'ID of the wall this opening attaches to' },
+              wallOffset: {
+                type: Type.NUMBER,
+                description: 'Ratio along wall (e.g. 0.3 for 30% from start)',
+              },
+              flipSwing: { type: Type.BOOLEAN, description: 'Door swing flip (default false)' },
             },
-            required: ["id", "type", "subType", "x", "y", "width", "rotation"]
-          }
+            required: ['id', 'type', 'subType', 'x', 'y', 'width', 'rotation'],
+          },
         },
         furniture: {
           type: Type.ARRAY,
           items: {
             type: Type.OBJECT,
             properties: {
-              id: { type: Type.STRING, description: "Unique string id" },
-              subType: { type: Type.STRING, description: "One of: 'sofa', 'bed', 'table', 'chair', 'plant', 'toilet', 'tub', 'counter', 'fridge', 'tv-stand', 'vanity'" },
-              label: { type: Type.STRING, description: "Readable label: e.g. 'King Bed', '3-Seater Sofa', 'Coffee Table', 'Dining Table', 'Toilet', 'Shower Tub', 'Sink Cabinet'" },
-              x: { type: Type.NUMBER, description: "CENTER X pixel coordinate inside its parent room" },
-              y: { type: Type.NUMBER, description: "CENTER Y pixel coordinate inside its parent room" },
-              width: { type: Type.NUMBER, description: "Width in pixels" },
-              height: { type: Type.NUMBER, description: "Height in pixels" },
-              rotation: { type: Type.NUMBER, description: "Rotation angle in degrees (e.g., 0, 90, 180, 270)" },
-              category: { type: Type.STRING, description: "One of: 'living', 'bedroom', 'kitchen', 'bathroom', 'outdoor'" }
+              id: { type: Type.STRING, description: 'Unique string id' },
+              subType: {
+                type: Type.STRING,
+                description:
+                  "One of: 'sofa', 'bed', 'table', 'chair', 'plant', 'toilet', 'tub', 'counter', 'fridge', 'tv-stand', 'vanity'",
+              },
+              label: {
+                type: Type.STRING,
+                description:
+                  "Readable label: e.g. 'King Bed', '3-Seater Sofa', 'Coffee Table', 'Dining Table', 'Toilet', 'Shower Tub', 'Sink Cabinet'",
+              },
+              x: { type: Type.NUMBER, description: 'CENTER X pixel coordinate inside its parent room' },
+              y: { type: Type.NUMBER, description: 'CENTER Y pixel coordinate inside its parent room' },
+              width: { type: Type.NUMBER, description: 'Width in pixels' },
+              height: { type: Type.NUMBER, description: 'Height in pixels' },
+              rotation: {
+                type: Type.NUMBER,
+                description: 'Rotation angle in degrees (e.g., 0, 90, 180, 270)',
+              },
+              category: {
+                type: Type.STRING,
+                description: "One of: 'living', 'bedroom', 'kitchen', 'bathroom', 'outdoor'",
+              },
             },
-            required: ["id", "subType", "label", "x", "y", "width", "height", "rotation", "category"]
-          }
-        }
+            required: ['id', 'subType', 'label', 'x', 'y', 'width', 'height', 'rotation', 'category'],
+          },
+        },
       },
-      required: ["walls", "rooms", "openings", "furniture"]
-    }
+      required: ['walls', 'rooms', 'openings', 'furniture'],
+    },
   },
-  required: ["name", "rationale", "dimensions", "plan"]
+  required: ['name', 'rationale', 'dimensions', 'plan'],
 };
 
 const AUDIT_RESPONSE_SCHEMA = {
@@ -337,28 +395,37 @@ const AUDIT_RESPONSE_SCHEMA = {
   properties: {
     issues: {
       type: Type.ARRAY,
-      description: "List of architectural issues, violations, or suggestions.",
+      description: 'List of architectural issues, violations, or suggestions.',
       items: {
         type: Type.OBJECT,
         properties: {
           id: { type: Type.STRING },
-          type: { type: Type.STRING, description: "Severity level: 'error', 'warning', 'info', or 'success'" },
-          category: { type: Type.STRING, description: "Category: 'safety', 'accessibility', 'flow', or 'structure'" },
-          title: { type: Type.STRING, description: "Short summary of the issue or insight" },
-          message: { type: Type.STRING, description: "Detailed explanation and suggestion" },
-          elementId: { type: Type.STRING, description: "ID of the specific floor plan element causing the issue, if applicable" }
+          type: {
+            type: Type.STRING,
+            description: "Severity level: 'error', 'warning', 'info', or 'success'",
+          },
+          category: {
+            type: Type.STRING,
+            description: "Category: 'safety', 'accessibility', 'flow', or 'structure'",
+          },
+          title: { type: Type.STRING, description: 'Short summary of the issue or insight' },
+          message: { type: Type.STRING, description: 'Detailed explanation and suggestion' },
+          elementId: {
+            type: Type.STRING,
+            description: 'ID of the specific floor plan element causing the issue, if applicable',
+          },
         },
-        required: ["id", "type", "category", "title", "message"]
-      }
+        required: ['id', 'type', 'category', 'title', 'message'],
+      },
     },
     optimizedPlan: {
       type: Type.OBJECT,
-      description: "An optimized version of the input floor plan that resolves the identified issues.",
+      description: 'An optimized version of the input floor plan that resolves the identified issues.',
       properties: FLOOR_PLAN_RESPONSE_SCHEMA.properties.plan.properties,
-      required: ["walls", "rooms", "openings", "furniture"]
-    }
+      required: ['walls', 'rooms', 'openings', 'furniture'],
+    },
   },
-  required: ["issues", "optimizedPlan"]
+  required: ['issues', 'optimizedPlan'],
 };
 
 // ---------------------------------------------------------------------------
@@ -373,7 +440,8 @@ function missingKey(): { status: number; body: Record<string, unknown> } | null 
       status: 400,
       body: {
         error: 'Missing API Key',
-        message: 'Gemini API key is not configured. Please add your GEMINI_API_KEY in the Settings > Secrets panel.',
+        message:
+          'Gemini API key is not configured. Please add your GEMINI_API_KEY in the Settings > Secrets panel.',
       },
     };
   }
@@ -403,7 +471,7 @@ const VARIATION_DIRECTIONS = [
 const PHOTO_VARIATION_DIRECTIONS = [
   'Option A: Direct layout optimizing for the most prominent site features and sunlight.',
   'Option B: Alternative layout offering a different living zone orientation based on site constraints.',
-  'Option C: Unique architectural approach integrating tightly with the site\'s natural boundaries.',
+  "Option C: Unique architectural approach integrating tightly with the site's natural boundaries.",
 ];
 
 /**
@@ -416,7 +484,7 @@ async function resolveVariants(
   calls: Promise<{ text?: string }>[],
   directions: string[],
   idPrefix: string,
-  brief: ReturnType<typeof readBrief>
+  brief: ReturnType<typeof readBrief>,
 ) {
   const results = await Promise.allSettled(calls);
 
@@ -480,6 +548,29 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+/**
+ * Readiness probe, distinct from liveness.
+ *
+ * Kubernetes needs two answers: "is this process alive?" (restart it if not)
+ * and "should it receive traffic?" (take it out of rotation if not). A missing
+ * API key means the process is healthy but the AI features would 400, so the
+ * orchestrator should keep it out of rotation. Liveness stays unconditional so
+ * a misconfigured deployment is not crash-looped.
+ */
+app.get('/api/ready', (_req, res) => {
+  const configured = missingKey() === null;
+  res.status(configured ? 200 : 503).json({
+    ready: configured,
+    uptimeSeconds: uptimeSeconds(),
+    apiKeyConfigured: configured,
+    // Build metadata for support triage. Never include secrets.
+    version: process.env.npm_package_version || '0.1.0',
+    commit: process.env.GIT_COMMIT || 'unknown',
+    node: process.version,
+    models: MODELS,
+  });
+});
+
 // POST route to handle prompt engineering and generate floor plan variants
 app.post('/api/generate-floor-plan', async (req, res) => {
   let brief: ReturnType<typeof readBrief>;
@@ -513,7 +604,7 @@ All coordinates MUST be integers and align to a 10px or 20px grid spacing where 
           responseSchema: FLOOR_PLAN_RESPONSE_SCHEMA,
           temperature: 0.7 + i * 0.1, // slightly vary the temperatures for diverse variants
         },
-      })
+      }),
     );
 
     const variants = await resolveVariants(calls, VARIATION_DIRECTIONS, 'variant', brief);
@@ -523,7 +614,8 @@ All coordinates MUST be integers and align to a 10px or 20px grid spacing where 
     res.status(500).json({
       success: false,
       error: 'AI Generation Error',
-      message: 'An unexpected error occurred during design generation. Please verify your prompt and try again.',
+      message:
+        'An unexpected error occurred during design generation. Please verify your prompt and try again.',
     });
   }
 });
@@ -576,7 +668,7 @@ All coordinates MUST be integers and align to a 10px or 20px grid spacing.
           responseSchema: FLOOR_PLAN_RESPONSE_SCHEMA,
           temperature: 0.7 + i * 0.1,
         },
-      })
+      }),
     );
 
     const variants = await resolveVariants(calls, PHOTO_VARIATION_DIRECTIONS, 'variant-photo', brief);
@@ -745,7 +837,9 @@ app.post('/api/architect-chat', async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const messages = normalizeMessages(body.messages);
     if (messages.length === 0) {
-      return res.status(400).json({ success: false, error: 'Invalid Request', message: 'No message content provided.' });
+      return res
+        .status(400)
+        .json({ success: false, error: 'Invalid Request', message: 'No message content provided.' });
     }
 
     const plan = normalizePlan(body.plan);
@@ -823,9 +917,11 @@ app.post('/api/architect-chat', async (req, res) => {
 // the user sees a generic message instead of the real one.
 // ---------------------------------------------------------------------------
 
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  const isBodyTooLarge = err?.type === 'entity.too.large' || err?.status === 413;
-  const isBadJson = err?.type === 'entity.parse.failed';
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  // Express hands this an arbitrary thrown value, including non-Error objects.
+  const detail = (err ?? {}) as { type?: string; status?: number };
+  const isBodyTooLarge = detail.type === 'entity.too.large' || detail.status === 413;
+  const isBadJson = detail.type === 'entity.parse.failed';
 
   if (isBodyTooLarge) {
     return res.status(413).json({
@@ -835,11 +931,15 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
     });
   }
   if (isBadJson) {
-    return res.status(400).json({ success: false, error: 'Invalid JSON', message: 'Request body is not valid JSON.' });
+    return res
+      .status(400)
+      .json({ success: false, error: 'Invalid JSON', message: 'Request body is not valid JSON.' });
   }
 
   console.error('Unhandled error:', err);
-  res.status(500).json({ success: false, error: 'Server Error', message: 'An unexpected server error occurred.' });
+  res
+    .status(500)
+    .json({ success: false, error: 'Server Error', message: 'An unexpected server error occurred.' });
 });
 
 // ---------------------------------------------------------------------------
@@ -847,25 +947,65 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 // ---------------------------------------------------------------------------
 
 async function startServer() {
-  // Integrate Vite for asset bundling in development
-  if (process.env.NODE_ENV !== 'production') {
+  // Integrate Vite for asset bundling in development.
+  //
+  // Imported dynamically, not at module scope: `vite` is a devDependency, so a
+  // top-level `import { createServer } from 'vite'` is a require() of a package
+  // that does not exist in a production image -- the bundled server would
+  // crash before it could serve a single request.
+  if (!IS_PRODUCTION) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    // Serve static files in production
+    // Serve static files in production.
+    //
+    // Vite fingerprints every file in dist/assets, so those are immutable and
+    // can be cached for a year. index.html must not be cached at all, or a
+    // deploy leaves clients pinned to a stale bundle referencing deleted
+    // chunks.
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(
+      '/assets',
+      express.static(path.join(distPath, 'assets'), {
+        immutable: true,
+        maxAge: '1y',
+      }),
+    );
+    app.use(
+      express.static(distPath, {
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache');
+        },
+      }),
+    );
     app.get('*', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
   const server = app.listen(PORT, '0.0.0.0', () => {
+    /* eslint-disable no-console -- startup banner: the one place console is right */
     console.log(`[LandCraft AI] Server booting up on port ${PORT}`);
     console.log(`[LandCraft AI] Models: ${JSON.stringify(MODELS)}`);
+    console.log(`[LandCraft AI] Environment: ${IS_PRODUCTION ? 'production' : 'development'}`);
+    if (missingKey()) {
+      console.warn('[LandCraft AI] GEMINI_API_KEY is not set -- AI routes will return 400.');
+    }
+    /* eslint-enable no-console */
+  });
+
+  // Drain in-flight requests on SIGTERM/SIGINT instead of dropping connections
+  // mid-response. Essential for rolling deploys.
+  installGracefulShutdown(server, {
+    timeoutMs: Number(process.env.SHUTDOWN_TIMEOUT_MS) || 10_000,
+    onDrained: () => {
+      // Hook for closing database pools / flushing telemetry in future.
+    },
   });
 
   // Without this, a port conflict throws an unhandled 'error' event and kills
@@ -880,4 +1020,5 @@ async function startServer() {
   });
 }
 
+installCrashHandlers();
 startServer();

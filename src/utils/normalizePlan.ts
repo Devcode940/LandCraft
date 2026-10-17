@@ -82,7 +82,9 @@ function normalizeOpening(raw: unknown, i: number): Opening {
   return {
     id: id(o.id, type, i),
     type,
-    subType: (typeof o.subType === 'string' && o.subType.trim() ? o.subType.trim().slice(0, 32) : 'single') as Opening['subType'],
+    subType: (typeof o.subType === 'string' && o.subType.trim()
+      ? o.subType.trim().slice(0, 32)
+      : 'single') as Opening['subType'],
     x: num(o.x, 0, -COORD_LIMIT, COORD_LIMIT),
     y: num(o.y, 0, -COORD_LIMIT, COORD_LIMIT),
     width: num(o.width, 32, 1, 1000),

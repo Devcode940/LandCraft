@@ -3,15 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type ToolType =
-  | 'select'
-  | 'wall'
-  | 'room'
-  | 'door'
-  | 'window'
-  | 'furniture'
-  | 'measure'
-  | 'delete';
+export type ToolType = 'select' | 'wall' | 'room' | 'door' | 'window' | 'furniture' | 'measure' | 'delete';
 
 export type DimensionUnit = 'ft' | 'm';
 
@@ -75,7 +67,37 @@ export interface MeasurementTape {
   y2: number;
 }
 
-export type FloorPlanElement = 
+/**
+ * A preset picked from the sidebar palette, waiting to be placed.
+ *
+ * Previously `any`, which meant a typo in `subType` or a renamed property
+ * failed silently at runtime instead of at compile time.
+ */
+export type PaletteItem =
+  | {
+      type: 'room';
+      subType: string;
+      label: string;
+      width?: number;
+      height?: number;
+      color?: string;
+    }
+  | {
+      type: 'opening';
+      subType: Opening['subType'];
+      label: string;
+      width?: number;
+    }
+  | {
+      type: 'furniture';
+      subType: string;
+      label: string;
+      width?: number;
+      height?: number;
+      category?: Furniture['category'];
+    };
+
+export type FloorPlanElement =
   | { type: 'wall'; data: Wall }
   | { type: 'room'; data: Room }
   | { type: 'opening'; data: Opening }

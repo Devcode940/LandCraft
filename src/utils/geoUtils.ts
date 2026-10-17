@@ -37,7 +37,7 @@ export function formatDimension(pixels: number, unit: DimensionUnit): string {
 export function formatWallDimensions(
   lengthPx: number,
   thicknessPx: number,
-  unit: DimensionUnit
+  unit: DimensionUnit,
 ): { lengthStr: string; widthStr: string; combinedStr: string } {
   let lengthStr: string;
   let widthStr: string;
@@ -75,7 +75,11 @@ export function getDistance(p1: Point, p2: Point): number {
 /**
  * Get closest point on a line segment (AB) from point (P)
  */
-export function getClosestPointOnSegment(p: Point, a: Point, b: Point): { point: Point; offset: number; distance: number } {
+export function getClosestPointOnSegment(
+  p: Point,
+  a: Point,
+  b: Point,
+): { point: Point; offset: number; distance: number } {
   const abX = b.x - a.x;
   const abY = b.y - a.y;
   const abLen2 = abX * abX + abY * abY;
@@ -117,7 +121,7 @@ export function getSmartSnap(
   p: Point,
   walls: Wall[],
   gridSize: number,
-  options: { snapToGrid: boolean; snapToElements: boolean }
+  options: { snapToGrid: boolean; snapToElements: boolean },
 ): Point {
   if (!options.snapToGrid && !options.snapToElements) {
     return p;
@@ -164,7 +168,7 @@ export function getSmartSnap(
 export function snapOpeningToWalls(
   p: Point,
   walls: Wall[],
-  threshold = 20
+  threshold = 20,
 ): { point: Point; wallId: string | undefined; rotation: number; offset: number } {
   let closestWall: Wall | undefined;
   let minDistance = threshold;
@@ -202,7 +206,11 @@ export function snapOpeningToWalls(
 /**
  * Calculate area of a room in square meters and square feet
  */
-export function calculateRoomArea(width: number, height: number, unit: DimensionUnit): { area: number; formatted: string } {
+export function calculateRoomArea(
+  width: number,
+  height: number,
+  unit: DimensionUnit,
+): { area: number; formatted: string } {
   const widthM = width / PIXELS_PER_METER;
   const heightM = height / PIXELS_PER_METER;
   const areaM2 = widthM * heightM;
@@ -251,7 +259,7 @@ export function getWallBounds(walls: Wall[]): { x: number; y: number; width: num
  */
 export function checkBoundingBoxCollision(
   rect1: { x: number; y: number; width: number; height: number },
-  rect2: { x: number; y: number; width: number; height: number }
+  rect2: { x: number; y: number; width: number; height: number },
 ): boolean {
   return (
     rect1.x < rect2.x + rect2.width &&
@@ -295,7 +303,7 @@ export function isPointInDoorSwing(p: Point, op: Opening): boolean {
 /** Does an AABB intersect a door's swing sector? */
 export function boxIntersectsDoorSwing(
   box: { x: number; y: number; width: number; height: number },
-  op: Opening
+  op: Opening,
 ): boolean {
   const corners: Point[] = [
     { x: box.x, y: box.y },
@@ -332,7 +340,7 @@ export interface OverlapWarning {
 export function checkOverlapWarnings(
   rooms: Room[],
   openings: Opening[],
-  furniture: Furniture[]
+  furniture: Furniture[],
 ): OverlapWarning[] {
   const warnings: OverlapWarning[] = [];
 
@@ -377,7 +385,7 @@ export function checkOverlapWarnings(
         r1.x >= room.x - 0.5 &&
         r1.y >= room.y - 0.5 &&
         r1.x + r1.width <= room.x + room.width + 0.5 &&
-        r1.y + r1.height <= room.y + room.height + 0.5
+        r1.y + r1.height <= room.y + room.height + 0.5,
     );
     if (rooms.length > 0 && !insideSomeRoom) {
       warnings.push({

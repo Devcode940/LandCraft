@@ -43,7 +43,7 @@ export function updateElement<T extends ElementType>(
   plan: FloorPlanData,
   type: T,
   id: string,
-  patch: Partial<FloorPlanDataMap[T]>
+  patch: Partial<FloorPlanDataMap[T]>,
 ): FloorPlanData {
   switch (type) {
     case 'wall': {
@@ -101,7 +101,7 @@ export function addElement(plan: FloorPlanData, type: 'furniture', data: Furnitu
 export function addElement(
   plan: FloorPlanData,
   type: ElementType,
-  data: Wall | Room | Opening | Furniture
+  data: Wall | Room | Opening | Furniture,
 ): FloorPlanData {
   switch (type) {
     case 'wall':
@@ -166,14 +166,14 @@ export function furnitureBounds(f: Furniture) {
 export function rectContainsPoint(
   rect: { x: number; y: number; width: number; height: number },
   px: number,
-  py: number
+  py: number,
 ): boolean {
   return px >= rect.x && px <= rect.x + rect.width && py >= rect.y && py <= rect.y + rect.height;
 }
 
 export function rectContainsRect(
   outer: { x: number; y: number; width: number; height: number },
-  inner: { x: number; y: number; width: number; height: number }
+  inner: { x: number; y: number; width: number; height: number },
 ): boolean {
   return (
     inner.x >= outer.x &&
@@ -189,7 +189,12 @@ export function rectContainsRect(
  * Previously dragging a room moved only the rectangle and left its contents
  * behind, which is not what anyone means by "move this room".
  */
-export function moveRoomWithContents(plan: FloorPlanData, roomId: string, newX: number, newY: number): FloorPlanData {
+export function moveRoomWithContents(
+  plan: FloorPlanData,
+  roomId: string,
+  newX: number,
+  newY: number,
+): FloorPlanData {
   const room = plan.rooms.find((r) => r.id === roomId);
   if (!room) return plan;
 
@@ -201,12 +206,12 @@ export function moveRoomWithContents(plan: FloorPlanData, roomId: string, newX: 
 
   // Carry furniture whose centre sits inside the room.
   const furniture = plan.furniture.map((f) =>
-    rectContainsPoint(room, f.x, f.y) ? { ...f, x: f.x + dx, y: f.y + dy } : f
+    rectContainsPoint(room, f.x, f.y) ? { ...f, x: f.x + dx, y: f.y + dy } : f,
   );
 
   // Carry openings that sit inside the room's rectangle.
   const openings = plan.openings.map((o) =>
-    rectContainsPoint(room, o.x, o.y) ? { ...o, x: o.x + dx, y: o.y + dy } : o
+    rectContainsPoint(room, o.x, o.y) ? { ...o, x: o.x + dx, y: o.y + dy } : o,
   );
 
   return { ...plan, rooms, furniture, openings };
@@ -224,7 +229,12 @@ export function allIds(plan: FloorPlanData): Set<string> {
 
 /** True when the plan has nothing in it. */
 export function isPlanEmpty(plan: FloorPlanData): boolean {
-  return plan.walls.length === 0 && plan.rooms.length === 0 && plan.openings.length === 0 && plan.furniture.length === 0;
+  return (
+    plan.walls.length === 0 &&
+    plan.rooms.length === 0 &&
+    plan.openings.length === 0 &&
+    plan.furniture.length === 0
+  );
 }
 
 /** Total element count, used to gate O(n²) analysis passes. */

@@ -31,7 +31,7 @@ export default defineConfig(() => {
       globals: true,
       include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
       coverage: {
-        provider: 'v8',
+        provider: 'v8' as const,
         reporter: ['text'],
         include: ['src/lib/**', 'src/utils/**'],
       },

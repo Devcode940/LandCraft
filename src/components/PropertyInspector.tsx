@@ -4,16 +4,32 @@
  */
 
 import { useState } from 'react';
-import { Trash2, RotateCw, ArrowLeftRight, Settings, Lock, Unlock, Ruler, Layers, Sparkles, Check, PanelRightClose } from 'lucide-react';
-import { Wall, Room, Opening, Furniture, DimensionUnit, LayerVisibility } from '../types';
+import {
+  Trash2,
+  RotateCw,
+  ArrowLeftRight,
+  Settings,
+  Lock,
+  Unlock,
+  Ruler,
+  Layers,
+  Sparkles,
+  Check,
+  PanelRightClose,
+} from 'lucide-react';
+import { Wall, Room, Opening, Furniture, DimensionUnit, LayerVisibility, FloorPlanElement } from '../types';
 import { formatDimension, calculateRoomArea } from '../utils/geoUtils';
 import { suggestRoomName } from '../utils/roomAutoLabeler';
 import { useResetOnDeps } from '../hooks/useDerivedState';
 
 interface PropertyInspectorProps {
-  selectedElement: any | null;
+  selectedElement: FloorPlanElement['data'] | null;
   selectedType: 'wall' | 'room' | 'opening' | 'furniture' | null;
-  onUpdateElement: (type: 'wall' | 'room' | 'opening' | 'furniture', id: string, updatedData: any) => void;
+  onUpdateElement: (
+    type: 'wall' | 'room' | 'opening' | 'furniture',
+    id: string,
+    updatedData: Partial<Wall & Room & Opening & Furniture>,
+  ) => void;
   onDeleteElement: (type: 'wall' | 'room' | 'opening' | 'furniture', id: string) => void;
   unit: DimensionUnit;
   highContrast: boolean;
@@ -116,7 +132,7 @@ export default function PropertyInspector({
     ? 'bg-white border-l-2 border-black text-black'
     : 'bg-slate-50 dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200';
 
-  const handleValueChange = (field: string, val: any) => {
+  const handleValueChange = (field: string, val: string | number | boolean) => {
     if (!selectedType || !selectedElement) return;
     onUpdateElement(selectedType, selectedElement.id, { [field]: val });
   };
@@ -140,7 +156,10 @@ export default function PropertyInspector({
       </h4>
       <div className="space-y-2.5">
         {(Object.keys(LAYER_LABELS) as (keyof LayerVisibility)[]).map((layer) => (
-          <label key={layer} className="flex items-center gap-2 text-xs font-medium cursor-pointer select-none">
+          <label
+            key={layer}
+            className="flex items-center gap-2 text-xs font-medium cursor-pointer select-none"
+          >
             <input
               type="checkbox"
               checked={layerVisibility[layer]}
@@ -195,7 +214,10 @@ export default function PropertyInspector({
   // --- No selection: hint + layers ---
   if (!selectedElement || !selectedType) {
     return (
-      <div id="inspector-container" className={`w-64 shrink-0 p-4 flex flex-col h-full overflow-y-auto ${inspectorBg}`}>
+      <div
+        id="inspector-container"
+        className={`w-64 shrink-0 p-4 flex flex-col h-full overflow-y-auto ${inspectorBg}`}
+      >
         {header}
         <div className="flex-1 flex flex-col items-center justify-center text-center p-6 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
           <Settings className="w-8 h-8 text-slate-300 dark:text-slate-700 mb-2.5" />
@@ -210,7 +232,10 @@ export default function PropertyInspector({
   }
 
   return (
-    <div id="inspector-container" className={`w-64 shrink-0 p-4 flex flex-col h-full overflow-y-auto ${inspectorBg}`}>
+    <div
+      id="inspector-container"
+      className={`w-64 shrink-0 p-4 flex flex-col h-full overflow-y-auto ${inspectorBg}`}
+    >
       <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3 mb-4 shrink-0">
         <div className="flex items-center gap-2">
           <Settings className="w-4 h-4 text-emerald-500" />
@@ -360,7 +385,9 @@ export default function PropertyInspector({
                         </span>
                       )}
                     </div>
-                    <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-snug">{roomSuggestion.reason}</p>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-snug">
+                      {roomSuggestion.reason}
+                    </p>
                   </div>
 
                   {roomSuggestion.detectedFurniture.length > 0 ? (
@@ -604,7 +631,7 @@ export default function PropertyInspector({
                 />
                 <button
                   onClick={() =>
-                    handleValueChange('rotation', (((selectedElement as Furniture).rotation + 90) % 360))
+                    handleValueChange('rotation', ((selectedElement as Furniture).rotation + 90) % 360)
                   }
                   className="p-1 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded cursor-pointer"
                   title="Rotate 90 degrees"

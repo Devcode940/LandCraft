@@ -10,7 +10,18 @@ import { ContactShadows, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { FloorPlanData } from '../types';
 import { PIXELS_PER_METER } from '../utils/geoUtils';
-import { X, RotateCcw, Crosshair, ArrowDownToLine, Info, Camera, Scale, Minus, Plus, Box } from 'lucide-react';
+import {
+  X,
+  RotateCcw,
+  Crosshair,
+  ArrowDownToLine,
+  Info,
+  Camera,
+  Scale,
+  Minus,
+  Plus,
+  Box,
+} from 'lucide-react';
 
 /**
  * Module-scope XR store.
@@ -51,13 +62,31 @@ const DEFAULT_FURNITURE_HEIGHT = 0.8;
  * on its own -- exiting AR via the browser/OS control left the AR chrome stuck
  * on screen over a plain 3D view.
  */
+/**
+ * The slice of `@react-three/xr`'s zustand store this component needs.
+ *
+ * The package ships no top-level type declarations, so the store arrives as
+ * `unknown`. Declaring the shape we actually use keeps the one unavoidable cast
+ * at a single, named boundary instead of scattering `any` through the hook.
+ */
+interface XRStoreLike {
+  getState?: () => { session?: XRSession | null } | undefined;
+  subscribe?: (listener: (state: { session?: XRSession | null }) => void) => () => void;
+}
+
+/** Read the current XR session out of the store, tolerating an old API shape. */
+function readXRSession(store: unknown): XRSession | null {
+  const s = store as XRStoreLike | undefined;
+  return s?.getState?.()?.session ?? null;
+}
+
 function useXRSession(): XRSession | null {
-  const [session, setSession] = useState<XRSession | null>(() => (store as any)?.getState?.()?.session ?? null);
+  const [session, setSession] = useState<XRSession | null>(() => readXRSession(store) ?? null);
 
   useEffect(() => {
-    const s = store as any;
+    const s = store as unknown as XRStoreLike | undefined;
     if (typeof s?.subscribe !== 'function') return;
-    const unsubscribe = s.subscribe((next: any) => {
+    const unsubscribe = s.subscribe((next: { session?: XRSession | null }) => {
       const value = next?.session ?? null;
       setSession((prev) => (prev === value ? prev : value));
     });
@@ -98,7 +127,7 @@ function Plan3DModel({ plan }: { plan: FloorPlanData }) {
         opacity: 0.55,
       }),
     }),
-    []
+    [],
   );
 
   // Dispose on unmount: these were previously leaked on every close.
@@ -106,7 +135,7 @@ function Plan3DModel({ plan }: { plan: FloorPlanData }) {
     () => () => {
       Object.values(materials).forEach((m) => m.dispose());
     },
-    [materials]
+    [materials],
   );
 
   return (
@@ -185,11 +214,7 @@ function Plan3DModel({ plan }: { plan: FloorPlanData }) {
         return (
           <mesh
             key={op.id}
-            position={[
-              cx + (dirX * width) / 2,
-              DOOR_HEIGHT / 2,
-              cz + (dirZ * width) / 2,
-            ]}
+            position={[cx + (dirX * width) / 2, DOOR_HEIGHT / 2, cz + (dirZ * width) / 2]}
             rotation={[0, -theta, 0]}
             castShadow
           >
@@ -242,29 +267,26 @@ function ARScene({
   const [currentPos, setCurrentPos] = useState<THREE.Vector3 | null>(null);
   const inSession = useXRSession() != null;
 
-  useXRHitTest(
-    (results, getWorldMatrix) => {
-      if (isPlaced || !reticleRef.current) return;
+  useXRHitTest((results, getWorldMatrix) => {
+    if (isPlaced || !reticleRef.current) return;
 
-      if (results.length === 0) {
-        reticleRef.current.visible = false;
-        return;
-      }
-      reticleRef.current.visible = true;
-      const matrixHelper = new THREE.Matrix4();
-      getWorldMatrix(matrixHelper, results[0]);
+    if (results.length === 0) {
+      reticleRef.current.visible = false;
+      return;
+    }
+    reticleRef.current.visible = true;
+    const matrixHelper = new THREE.Matrix4();
+    getWorldMatrix(matrixHelper, results[0]);
 
-      reticleRef.current.matrixAutoUpdate = false;
-      reticleRef.current.matrix.copy(matrixHelper);
-      // Without flagging this, three never recomputes matrixWorld from the
-      // hand-written matrix and the reticle stays pinned at the origin.
-      reticleRef.current.matrixWorldNeedsUpdate = true;
+    reticleRef.current.matrixAutoUpdate = false;
+    reticleRef.current.matrix.copy(matrixHelper);
+    // Without flagging this, three never recomputes matrixWorld from the
+    // hand-written matrix and the reticle stays pinned at the origin.
+    reticleRef.current.matrixWorldNeedsUpdate = true;
 
-      const pos = new THREE.Vector3().setFromMatrixPosition(matrixHelper);
-      setCurrentPos(pos);
-    },
-    'viewer'
-  );
+    const pos = new THREE.Vector3().setFromMatrixPosition(matrixHelper);
+    setCurrentPos(pos);
+  }, 'viewer');
 
   useEffect(() => {
     const handlePointerDown = () => {
@@ -371,7 +393,9 @@ export default function ARViewer({ plan, onClose }: { plan: FloorPlanData; onClo
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      showToast(inSession ? 'Saved the 3D layer (camera feed is not captured).' : 'Saved PNG to your downloads.');
+      showToast(
+        inSession ? 'Saved the 3D layer (camera feed is not captured).' : 'Saved PNG to your downloads.',
+      );
     } catch (e) {
       console.error('Capture failed', e);
       showToast('Capture failed on this device.');

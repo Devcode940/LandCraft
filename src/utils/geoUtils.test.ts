@@ -48,7 +48,7 @@ const opening = (over: Partial<Opening> = {}): Opening => ({
 describe('pixelsToFeetInches', () => {
   it('carries rounded inches into the feet component', () => {
     // 71.9" must become 6' 0", never 5' 12".
-    expect(pixelsToFeetInches(71.9 / 12 * 12.192)).toEqual({ feet: 6, inches: 0 });
+    expect(pixelsToFeetInches((71.9 / 12) * 12.192)).toEqual({ feet: 6, inches: 0 });
   });
 
   it('never emits 12 inches', () => {
@@ -74,7 +74,7 @@ describe('formatDimension', () => {
 
   it('formats imperial without impossible values', () => {
     const out = formatDimension(73.15, 'ft');
-    expect(out).not.toContain("12\"");
+    expect(out).not.toContain('12"');
   });
 });
 
@@ -86,7 +86,7 @@ describe('formatWallDimensions', () => {
 
   it('round-trips length in both unit systems', () => {
     expect(formatWallDimensions(40, 10, 'm').lengthStr).toBe('1.00m');
-    expect(formatWallDimensions(12.192, 10, 'ft').lengthStr).toBe("1' 0\"");
+    expect(formatWallDimensions(12.192, 10, 'ft').lengthStr).toBe('1\' 0"');
   });
 });
 
@@ -109,12 +109,16 @@ describe('geometry primitives', () => {
 
   it('derives wall bounds, or null when there are no walls', () => {
     expect(getWallBounds([])).toBeNull();
-    expect(getWallBounds(normalizePlan({
-      walls: [
-        { id: 'a', x1: 10, y1: 20, x2: 110, y2: 20, thickness: 10 },
-        { id: 'b', x1: 110, y1: 20, x2: 110, y2: 120, thickness: 10 },
-      ],
-    }).walls)).toEqual({ x: 10, y: 20, width: 100, height: 100 });
+    expect(
+      getWallBounds(
+        normalizePlan({
+          walls: [
+            { id: 'a', x1: 10, y1: 20, x2: 110, y2: 20, thickness: 10 },
+            { id: 'b', x1: 110, y1: 20, x2: 110, y2: 120, thickness: 10 },
+          ],
+        }).walls,
+      ),
+    ).toEqual({ x: 10, y: 20, width: 100, height: 100 });
   });
 
   it('detects AABB collisions', () => {

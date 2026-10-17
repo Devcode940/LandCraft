@@ -35,6 +35,12 @@ export default tseslint.config(
     },
   },
   {
+    // The server writes structured JSON logs to stdout; console.log is the
+    // transport, not debug output.
+    files: ['server/**/*.ts'],
+    rules: { 'no-console': 'off' },
+  },
+  {
     // Test files may use loose typing and console output freely.
     files: ['**/*.test.{ts,tsx}'],
     rules: {

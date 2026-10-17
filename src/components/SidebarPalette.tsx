@@ -25,9 +25,9 @@ import {
   Armchair,
   Table,
   Leaf,
-  Refrigerator
+  Refrigerator,
 } from 'lucide-react';
-import { ToolType } from '../types';
+import { Furniture, PaletteItem, ToolType } from '../types';
 
 interface SidebarPaletteProps {
   activeTool: ToolType;
@@ -39,7 +39,7 @@ interface SidebarPaletteProps {
     width?: number;
     height?: number;
   } | null;
-  setSelectedPaletteItem: (item: any | null) => void;
+  setSelectedPaletteItem: (item: PaletteItem | null) => void;
   highContrast: boolean;
   onInstantAdd: (
     type: 'room' | 'opening' | 'furniture',
@@ -47,7 +47,7 @@ interface SidebarPaletteProps {
     label: string,
     width?: number,
     height?: number,
-    extra?: { color?: string; category?: string }
+    extra?: { color?: string; category?: string },
   ) => void;
   onToggle?: () => void;
 }
@@ -59,7 +59,7 @@ export default function SidebarPalette({
   setSelectedPaletteItem,
   highContrast,
   onInstantAdd,
-  onToggle
+  onToggle,
 }: SidebarPaletteProps) {
   const [expandedSection, setExpandedSection] = useState<string | null>('rooms');
 
@@ -73,10 +73,10 @@ export default function SidebarPalette({
     label: string,
     width?: number,
     height?: number,
-    extra?: { color?: string; category?: string }
+    extra?: { color?: string; category?: Furniture['category'] },
   ) => {
-    setSelectedPaletteItem({ type, subType, label, width, height, ...extra });
-    
+    setSelectedPaletteItem({ type, subType, label, width, height, ...extra } as PaletteItem);
+
     // Set appropriate active tool
     if (type === 'room') setActiveTool('room');
     else if (type === 'opening') setActiveTool('door');
@@ -85,12 +85,54 @@ export default function SidebarPalette({
 
   // Pre-configured room presets (width/height in pixels)
   const roomPresets = [
-    { subType: 'living', label: 'Living Room', icon: Tv, width: 160, height: 120, color: 'rgba(59, 130, 246, 0.08)' },
-    { subType: 'bedroom', label: 'Bedroom', icon: Bed, width: 140, height: 100, color: 'rgba(16, 185, 129, 0.08)' },
-    { subType: 'kitchen', label: 'Kitchen', icon: Utensils, width: 120, height: 80, color: 'rgba(245, 158, 11, 0.08)' },
-    { subType: 'bathroom', label: 'Bathroom', icon: Bath, width: 80, height: 60, color: 'rgba(239, 68, 68, 0.06)' },
-    { subType: 'office', label: 'Office/Den', icon: Square, width: 100, height: 80, color: 'rgba(99, 102, 241, 0.08)' },
-    { subType: 'garage', label: 'Garage', icon: Layout, width: 180, height: 140, color: 'rgba(107, 114, 128, 0.08)' }
+    {
+      subType: 'living',
+      label: 'Living Room',
+      icon: Tv,
+      width: 160,
+      height: 120,
+      color: 'rgba(59, 130, 246, 0.08)',
+    },
+    {
+      subType: 'bedroom',
+      label: 'Bedroom',
+      icon: Bed,
+      width: 140,
+      height: 100,
+      color: 'rgba(16, 185, 129, 0.08)',
+    },
+    {
+      subType: 'kitchen',
+      label: 'Kitchen',
+      icon: Utensils,
+      width: 120,
+      height: 80,
+      color: 'rgba(245, 158, 11, 0.08)',
+    },
+    {
+      subType: 'bathroom',
+      label: 'Bathroom',
+      icon: Bath,
+      width: 80,
+      height: 60,
+      color: 'rgba(239, 68, 68, 0.06)',
+    },
+    {
+      subType: 'office',
+      label: 'Office/Den',
+      icon: Square,
+      width: 100,
+      height: 80,
+      color: 'rgba(99, 102, 241, 0.08)',
+    },
+    {
+      subType: 'garage',
+      label: 'Garage',
+      icon: Layout,
+      width: 180,
+      height: 140,
+      color: 'rgba(107, 114, 128, 0.08)',
+    },
   ];
 
   // Opening presets (doors / windows)
@@ -100,24 +142,47 @@ export default function SidebarPalette({
     { subType: 'sliding', label: 'Sliding Door', type: 'opening', icon: DoorClosed, width: 50 },
     { subType: 'standard', label: 'Standard Window', type: 'opening', icon: Grid, width: 36 },
     { subType: 'large', label: 'Large Window', type: 'opening', icon: Grid, width: 54 },
-    { subType: 'bay', label: 'Bay Window', type: 'opening', icon: Grid, width: 44 }
+    { subType: 'bay', label: 'Bay Window', type: 'opening', icon: Grid, width: 44 },
   ];
 
   // Furniture categorizations
-  const furniturePresets = [
+  // Annotated so a typo in a category string is a compile error rather than a
+  // furniture item that silently lands in the wrong filter bucket.
+  const furniturePresets: Array<{
+    subType: string;
+    label: string;
+    category: Furniture['category'];
+    icon: typeof Bed;
+    width: number;
+    height: number;
+  }> = [
     { subType: 'bed', label: 'Queen Bed', category: 'bedroom', icon: Bed, width: 60, height: 70 },
     { subType: 'sofa', label: '3-Seater Sofa', category: 'living', icon: Sofa, width: 70, height: 32 },
     { subType: 'table', label: 'Dining Table', category: 'kitchen', icon: Table, width: 50, height: 32 },
     { subType: 'chair', label: 'Dining Chair', category: 'kitchen', icon: Armchair, width: 14, height: 14 },
     { subType: 'toilet', label: 'Toilet', category: 'bathroom', icon: Bath, width: 16, height: 22 },
     { subType: 'tub', label: 'Bathtub', category: 'bathroom', icon: Bath, width: 50, height: 26 },
-    { subType: 'counter', label: 'Kitchen Counter', category: 'kitchen', icon: Utensils, width: 60, height: 20 },
-    { subType: 'fridge', label: 'Refrigerator', category: 'kitchen', icon: Refrigerator, width: 24, height: 24 },
-    { subType: 'plant', label: 'House Plant', category: 'living', icon: Leaf, width: 16, height: 16 }
+    {
+      subType: 'counter',
+      label: 'Kitchen Counter',
+      category: 'kitchen',
+      icon: Utensils,
+      width: 60,
+      height: 20,
+    },
+    {
+      subType: 'fridge',
+      label: 'Refrigerator',
+      category: 'kitchen',
+      icon: Refrigerator,
+      width: 24,
+      height: 24,
+    },
+    { subType: 'plant', label: 'House Plant', category: 'living', icon: Leaf, width: 16, height: 16 },
   ];
 
-  const sidebarBg = highContrast 
-    ? 'bg-white border-r-2 border-black text-black' 
+  const sidebarBg = highContrast
+    ? 'bg-white border-r-2 border-black text-black'
     : 'bg-slate-50 dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200';
 
   const activeBtnStyle = highContrast
@@ -129,7 +194,10 @@ export default function SidebarPalette({
     : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700';
 
   return (
-    <div id="side-palette-container" className={`w-64 shrink-0 flex flex-col h-full overflow-y-auto ${sidebarBg}`}>
+    <div
+      id="side-palette-container"
+      className={`w-64 shrink-0 flex flex-col h-full overflow-y-auto ${sidebarBg}`}
+    >
       {/* Sidebar Header & Collapse Toggle */}
       <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -234,7 +302,11 @@ export default function SidebarPalette({
               <Square className="w-4 h-4 text-emerald-500" />
               Rooms & Zones
             </span>
-            {expandedSection === 'rooms' ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            {expandedSection === 'rooms' ? (
+              <ChevronDown className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5" />
+            )}
           </button>
 
           {expandedSection === 'rooms' && (
@@ -243,28 +315,38 @@ export default function SidebarPalette({
                 Select a room template, then click on the canvas to place it:
               </p>
               {roomPresets.map((preset) => {
-                const isSelected = selectedPaletteItem?.type === 'room' && selectedPaletteItem?.subType === preset.subType;
+                const isSelected =
+                  selectedPaletteItem?.type === 'room' && selectedPaletteItem?.subType === preset.subType;
                 return (
                   <div key={preset.subType} className="flex gap-1.5 items-center">
                     <button
                       onClick={() =>
-                        handlePaletteSelect('room', preset.subType, preset.label, preset.width, preset.height, {
-                          color: preset.color,
-                        })
+                        handlePaletteSelect(
+                          'room',
+                          preset.subType,
+                          preset.label,
+                          preset.width,
+                          preset.height,
+                          {
+                            color: preset.color,
+                          },
+                        )
                       }
                       className={`flex-1 flex items-center gap-2 p-2 text-left rounded text-xs transition-colors cursor-pointer ${
-                        isSelected 
-                          ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 border border-emerald-500 font-medium' 
+                        isSelected
+                          ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 border border-emerald-500 font-medium'
                           : 'hover:bg-slate-100 dark:hover:bg-slate-900 border border-transparent'
                       }`}
                     >
                       <preset.icon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                       <div className="truncate">
                         <div>{preset.label}</div>
-                        <div className="text-[9px] text-slate-400">Default: {(preset.width / 40).toFixed(1)}m × {(preset.height / 40).toFixed(1)}m</div>
+                        <div className="text-[9px] text-slate-400">
+                          Default: {(preset.width / 40).toFixed(1)}m × {(preset.height / 40).toFixed(1)}m
+                        </div>
                       </div>
                     </button>
-                    <button 
+                    <button
                       onClick={() =>
                         onInstantAdd('room', preset.subType, preset.label, preset.width, preset.height, {
                           color: preset.color,
@@ -292,7 +374,11 @@ export default function SidebarPalette({
               <DoorClosed className="w-4 h-4 text-emerald-500" />
               Doors & Windows
             </span>
-            {expandedSection === 'openings' ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            {expandedSection === 'openings' ? (
+              <ChevronDown className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5" />
+            )}
           </button>
 
           {expandedSection === 'openings' && (
@@ -301,24 +387,29 @@ export default function SidebarPalette({
                 Stamps will auto-snap to nearby walls when placed or dragged:
               </p>
               {openingPresets.map((preset) => {
-                const isSelected = selectedPaletteItem?.type === 'opening' && selectedPaletteItem?.subType === preset.subType;
+                const isSelected =
+                  selectedPaletteItem?.type === 'opening' && selectedPaletteItem?.subType === preset.subType;
                 return (
                   <div key={preset.subType} className="flex gap-1.5 items-center">
                     <button
-                      onClick={() => handlePaletteSelect('opening', preset.subType, preset.label, preset.width)}
+                      onClick={() =>
+                        handlePaletteSelect('opening', preset.subType, preset.label, preset.width)
+                      }
                       className={`flex-1 flex items-center gap-2 p-2 text-left rounded text-xs transition-colors cursor-pointer ${
-                        isSelected 
-                          ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 border border-emerald-500 font-medium' 
+                        isSelected
+                          ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 border border-emerald-500 font-medium'
                           : 'hover:bg-slate-100 dark:hover:bg-slate-900 border border-transparent'
                       }`}
                     >
                       <preset.icon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                       <div className="truncate">
                         <div>{preset.label}</div>
-                        <div className="text-[9px] text-slate-400">Width: {(preset.width / 40).toFixed(2)}m</div>
+                        <div className="text-[9px] text-slate-400">
+                          Width: {(preset.width / 40).toFixed(2)}m
+                        </div>
                       </div>
                     </button>
-                    <button 
+                    <button
                       onClick={() => onInstantAdd('opening', preset.subType, preset.label, preset.width)}
                       className="p-1 text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700 rounded h-8 shrink-0 cursor-pointer"
                       title="Instantly center on plan"
@@ -342,34 +433,49 @@ export default function SidebarPalette({
               <Tv className="w-4 h-4 text-emerald-500" />
               Furniture & Layout
             </span>
-            {expandedSection === 'furniture' ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            {expandedSection === 'furniture' ? (
+              <ChevronDown className="w-3.5 h-3.5" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5" />
+            )}
           </button>
 
           {expandedSection === 'furniture' && (
             <div className="p-2.5 bg-white dark:bg-slate-950 space-y-1.5 max-h-[300px] overflow-y-auto">
               {furniturePresets.map((preset) => {
-                const isSelected = selectedPaletteItem?.type === 'furniture' && selectedPaletteItem?.subType === preset.subType;
+                const isSelected =
+                  selectedPaletteItem?.type === 'furniture' &&
+                  selectedPaletteItem?.subType === preset.subType;
                 return (
                   <div key={preset.subType} className="flex gap-1.5 items-center">
                     <button
                       onClick={() =>
-                        handlePaletteSelect('furniture', preset.subType, preset.label, preset.width, preset.height, {
-                          category: preset.category,
-                        })
+                        handlePaletteSelect(
+                          'furniture',
+                          preset.subType,
+                          preset.label,
+                          preset.width,
+                          preset.height,
+                          {
+                            category: preset.category,
+                          },
+                        )
                       }
                       className={`flex-1 flex items-center gap-2 p-2 text-left rounded text-xs transition-colors cursor-pointer ${
-                        isSelected 
-                          ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 border border-emerald-500 font-medium' 
+                        isSelected
+                          ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 border border-emerald-500 font-medium'
                           : 'hover:bg-slate-100 dark:hover:bg-slate-900 border border-transparent'
                       }`}
                     >
                       <preset.icon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                       <div className="truncate">
                         <div>{preset.label}</div>
-                        <div className="text-[9px] text-slate-400">{(preset.width / 40).toFixed(1)}m × {(preset.height / 40).toFixed(1)}m</div>
+                        <div className="text-[9px] text-slate-400">
+                          {(preset.width / 40).toFixed(1)}m × {(preset.height / 40).toFixed(1)}m
+                        </div>
                       </div>
                     </button>
-                    <button 
+                    <button
                       onClick={() =>
                         onInstantAdd('furniture', preset.subType, preset.label, preset.width, preset.height, {
                           category: preset.category,
@@ -396,7 +502,12 @@ export default function SidebarPalette({
             <span>Placement Active</span>
           </div>
           <p className="leading-snug">
-            Click on canvas to place <strong className="font-semibold">{selectedPaletteItem.label}</strong>. Press <kbd className="px-1 bg-white dark:bg-slate-800 border border-slate-300 rounded shadow-xs text-[9px]">Esc</kbd> to cancel.
+            Click on canvas to place <strong className="font-semibold">{selectedPaletteItem.label}</strong>.
+            Press{' '}
+            <kbd className="px-1 bg-white dark:bg-slate-800 border border-slate-300 rounded shadow-xs text-[9px]">
+              Esc
+            </kbd>{' '}
+            to cancel.
           </p>
         </div>
       )}
