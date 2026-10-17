@@ -68,7 +68,7 @@ The app runs without a key. AI routes return `400 Missing API Key` and
 | `npm start` | Run the built server (`node dist/server.cjs`) |
 | `npm run typecheck` | `tsc --noEmit` under `strict` |
 | `npm run lint` | Typecheck + ESLint |
-| `npm test` | Vitest, 74 unit tests |
+| `npm test` | Vitest, 89 tests |
 | `npm run test:coverage` | Same, with V8 coverage over `src/lib` and `src/utils` |
 | `npm run format` | Prettier |
 | `npm run verify` | Typecheck + tests + build. Run this before pushing. |
@@ -88,7 +88,11 @@ src/
     download.ts           Blob download helper
   hooks/                  React-only helpers
   utils/                  Geometry, normalisation, room labelling, samples
-  components/             UI
+  components/
+    Modal.tsx             Accessible dialog: focus trap, Escape, scroll lock
+    ErrorBoundary.tsx     Root and per-panel crash containment
+    FloorPlanCanvas.tsx   The SVG editor surface
+    ...                   Panels and inspector
   types.ts                Shared data shapes
 ```
 
@@ -165,13 +169,22 @@ exec-form `CMD`, so the signal arrives.
 npm test
 ```
 
-The suite covers the parts where a mistake is silently wrong rather than
-visibly broken: history coalescing, immutability of plan operations, plan
-normalisation against hostile input, geometry and formatting edge cases
-(`5' 12"` is not a thing), and persistence against corrupt stored data.
+89 tests across six files. The suite covers the parts where a mistake is
+silently wrong rather than visibly broken:
 
-The canvas, AR viewer and AI panels have no automated coverage — they need a
-browser and, for the AI panels, a live key.
+| File | Covers |
+| --- | --- |
+| `lib/editorState.test.ts` | history coalescing, undo/redo, the 100-step cap, immutability |
+| `lib/planOps.test.ts` (in the same file) | add/update/delete/move, dangling `wallId` cleanup |
+| `lib/persistence.test.ts` | storage round trip, corrupt data, hostile import files |
+| `utils/normalizePlan.test.ts` | garbage, hostile and missing model output |
+| `utils/geoUtils.test.ts` | geometry, door-swing collision, `5' 12"` formatting bugs |
+| `components/Modal.test.tsx` | focus trap, Escape, focus restoration, scroll lock |
+| `components/ErrorBoundary.test.tsx` | fallbacks, panel variant, recovery |
+
+Not covered: canvas interaction (wall chains, snapping, drag bookkeeping), the
+AR viewer, and the AI panels themselves. Those need a browser, and the AI ones
+need a live key.
 
 ---
 
