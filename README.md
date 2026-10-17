@@ -68,7 +68,7 @@ The app runs without a key. AI routes return `400 Missing API Key` and
 | `npm start` | Run the built server (`node dist/server.cjs`) |
 | `npm run typecheck` | `tsc --noEmit` under `strict` |
 | `npm run lint` | Typecheck + ESLint |
-| `npm test` | Vitest, 89 tests |
+| `npm test` | Vitest, 95 tests |
 | `npm run test:coverage` | Same, with V8 coverage over `src/lib` and `src/utils` |
 | `npm run format` | Prettier |
 | `npm run verify` | Typecheck + tests + build. Run this before pushing. |
@@ -169,7 +169,7 @@ exec-form `CMD`, so the signal arrives.
 npm test
 ```
 
-89 tests across six files. The suite covers the parts where a mistake is
+95 tests across seven files. The suite covers the parts where a mistake is
 silently wrong rather than visibly broken:
 
 | File | Covers |
@@ -181,6 +181,7 @@ silently wrong rather than visibly broken:
 | `utils/geoUtils.test.ts` | geometry, door-swing collision, `5' 12"` formatting bugs |
 | `components/Modal.test.tsx` | focus trap, Escape, focus restoration, scroll lock |
 | `components/ErrorBoundary.test.tsx` | fallbacks, panel variant, recovery |
+| `components/AutoLabelRoomsModal.test.tsx` | the panel still mounts and closes correctly inside `Modal` |
 
 Not covered: canvas interaction (wall chains, snapping, drag bookkeeping), the
 AR viewer, and the AI panels themselves. Those need a browser, and the AI ones
