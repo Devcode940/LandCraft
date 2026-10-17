@@ -3,20 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { 
   Sparkles, 
   X, 
   Check, 
-  CheckCircle2, 
   ArrowRight, 
   Tv, 
   Bed, 
   Bath, 
   Utensils, 
   Square, 
-  Layers,
-  Ruler,
   AlertCircle
 } from 'lucide-react';
 import { FloorPlanData, DimensionUnit } from '../types';

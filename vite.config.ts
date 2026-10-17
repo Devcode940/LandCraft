@@ -1,7 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig(() => {
   return {
@@ -9,6 +9,21 @@ export default defineConfig(() => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+      },
+    },
+    build: {
+      // Surface bundle-size regressions instead of letting them creep in.
+      chunkSizeWarningLimit: 1200,
+      rollupOptions: {
+        output: {
+          manualChunks(id: string) {
+            // three/R3F/drei/xr belong to the lazily-loaded AR viewer only.
+            if (id.includes('node_modules/three') || id.includes('@react-three') || id.includes('@pmndrs')) {
+              return 'three';
+            }
+            return undefined;
+          },
+        },
       },
     },
     server: {
@@ -20,6 +35,16 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+    },
+    test: {
+      environment: 'jsdom',
+      globals: true,
+      include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+      coverage: {
+        provider: 'v8',
+        reporter: ['text'],
+        include: ['src/lib/**', 'src/utils/**'],
+      },
     },
   };
 });

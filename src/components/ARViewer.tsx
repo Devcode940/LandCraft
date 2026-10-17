@@ -3,14 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { createXRStore, XR, useXRHitTest, XRDomOverlay } from '@react-three/xr';
 import { ContactShadows, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { FloorPlanData } from '../types';
 import { PIXELS_PER_METER } from '../utils/geoUtils';
-import { X, RotateCcw, Crosshair, ArrowDownToLine, Info, Camera, Scale, Maximize, Minus, Plus, Box } from 'lucide-react';
+import { X, RotateCcw, Crosshair, ArrowDownToLine, Info, Camera, Scale, Minus, Plus, Box } from 'lucide-react';
 
 /**
  * Module-scope XR store.
@@ -61,8 +61,6 @@ function useXRSession(): XRSession | null {
       const value = next?.session ?? null;
       setSession((prev) => (prev === value ? prev : value));
     });
-    // Re-read once on mount in case the session changed before we subscribed.
-    setSession(s.getState?.()?.session ?? null);
     return () => unsubscribe?.();
   }, []);
 

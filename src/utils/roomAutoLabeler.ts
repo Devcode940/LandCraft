@@ -4,7 +4,7 @@
  */
 
 import { Room, Furniture, DimensionUnit, Point } from '../types';
-import { PIXELS_PER_METER, PIXELS_PER_FOOT } from './geoUtils';
+import { PIXELS_PER_METER } from './geoUtils';
 
 export interface DetectedFurnitureSummary {
   subType: string;
@@ -108,7 +108,7 @@ export function suggestRoomName(
   // Inference logic
   let suggestedName = "Room";
   let confidence = 50;
-  let category: RoomSuggestion['category'] = 'general';
+  let category: RoomSuggestion['category'];
   let reason = "";
   let alternativeNames: string[] = [];
 

@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { X, Send, Bot, User, Maximize2, Minimize2, Loader2, RefreshCw } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { X, Send, Bot, User, Minimize2, Loader2 } from 'lucide-react';
 import { FloorPlanData } from '../types';
 import { apiPost } from '../utils/apiClient';
 import Markdown from 'react-markdown';
@@ -66,7 +66,7 @@ export default function ArchitectChatPanel({ plan, onClose, onUpdatePlan }: Arch
       const assistantMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'model',
-        content: data.text
+        content: data.text || "(The architect returned an empty response.)"
       };
 
       setMessages(prev => [...prev, assistantMessage]);

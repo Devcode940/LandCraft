@@ -39,8 +39,8 @@ export function formatWallDimensions(
   thicknessPx: number,
   unit: DimensionUnit
 ): { lengthStr: string; widthStr: string; combinedStr: string } {
-  let lengthStr = '';
-  let widthStr = '';
+  let lengthStr: string;
+  let widthStr: string;
 
   if (unit === 'm') {
     const lengthMeters = lengthPx / PIXELS_PER_METER;

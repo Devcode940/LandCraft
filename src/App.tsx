@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { lazy, Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Sparkles, PanelLeftOpen, PanelRightOpen, Loader2 } from 'lucide-react';
 import { FloorPlanData, ToolType, DimensionUnit, LayerVisibility, Furniture } from './types';
 import { starterPlans } from './utils/sampleData';
@@ -541,7 +541,6 @@ export default function App() {
             setSelectedPaletteItem={setSelectedPaletteItem}
             highContrast={highContrast}
             onInstantAdd={handleInstantAdd}
-            isOpen={isLeftSidebarOpen}
             onToggle={() => setIsLeftSidebarOpen(false)}
           />
         )}
@@ -646,7 +645,6 @@ export default function App() {
             onToggleWallLabels={toggleWallLabels}
             furnitureList={plan.furniture}
             onOpenAutoLabeler={() => setIsAutoLabelModalOpen(true)}
-            isOpen={isRightSidebarOpen}
             onToggle={() => setIsRightSidebarOpen(false)}
           />
         )}
@@ -707,7 +705,7 @@ export default function App() {
 
       {/* Cost Estimator Overlay */}
       {isEstimatorOpen && (
-        <CostEstimatorPanel plan={plan} unit={unit} onClose={() => setIsEstimatorOpen(false)} />
+        <CostEstimatorPanel plan={plan} onClose={() => setIsEstimatorOpen(false)} />
       )}
 
       {/* AI Architect Chat */}

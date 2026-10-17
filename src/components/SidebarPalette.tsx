@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   Square,
   DoorClosed,
@@ -49,7 +49,6 @@ interface SidebarPaletteProps {
     height?: number,
     extra?: { color?: string; category?: string }
   ) => void;
-  isOpen?: boolean;
   onToggle?: () => void;
 }
 
@@ -60,7 +59,6 @@ export default function SidebarPalette({
   setSelectedPaletteItem,
   highContrast,
   onInstantAdd,
-  isOpen = true,
   onToggle
 }: SidebarPaletteProps) {
   const [expandedSection, setExpandedSection] = useState<string | null>('rooms');

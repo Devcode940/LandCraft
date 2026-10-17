@@ -16,13 +16,8 @@ import {
   ChevronUp,
   ChevronDown,
   Layout,
-  RefreshCw,
   Clock,
-  MapPin,
   Check,
-  Maximize2,
-  Minimize2,
-  FileText,
   Image as ImageIcon,
   Camera,
   UploadCloud
@@ -30,6 +25,7 @@ import {
 import { FloorPlanData, AIReviewItem, DimensionUnit } from '../types';
 import { checkOverlapWarnings } from '../utils/geoUtils';
 import { apiPost } from '../utils/apiClient';
+import { useResetOnDeps } from '../hooks/useDerivedState';
 
 interface AiAssistantPanelProps {
   plan: FloorPlanData;
@@ -129,8 +125,12 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
   // `plan` changes on every mousemove during a drag, so running this
   // synchronously re-rendered the whole findings board dozens of times per
   // second. Debounce to one pass after the interaction settles.
+  // An optimization is stale the moment the plan changes. Clearing it during
+  // render (not in an effect) avoids one committed paint showing an
+  // optimization that no longer matches the drawing.
+  useResetOnDeps([plan], () => setOptimizedPlan(null));
+
   useEffect(() => {
-    setOptimizedPlan(null); // An optimization is stale the moment the plan changes
     const timer = window.setTimeout(() => {
       runStaticAuditRef.current();
     }, 250);
@@ -141,7 +141,6 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
   useEffect(() => {
     if (!isGenerating) return;
     let phaseIndex = 0;
-    setLoadingPhase(LOADING_PHASES[0]);
     const interval = setInterval(() => {
       phaseIndex = (phaseIndex + 1) % LOADING_PHASES.length;
       setLoadingPhase(LOADING_PHASES[phaseIndex]);
@@ -179,6 +178,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
     }
     
     setIsGenerating(true);
+    setLoadingPhase(LOADING_PHASES[0]);
     setErrorMsg(null);
     setGeneratedVariants([]);
 
@@ -217,6 +217,7 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
   const handleGenerateAIPlan = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsGenerating(true);
+    setLoadingPhase(LOADING_PHASES[0]);
     setErrorMsg(null);
     setGeneratedVariants([]);
 
@@ -267,7 +268,6 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
     const roomLabels = rooms.map(r => r.label.toLowerCase());
     const hasBed = roomLabels.some(l => l.includes('bed') || l.includes('sleeping'));
     const hasBath = roomLabels.some(l => l.includes('bath') || l.includes('wc') || l.includes('toilet'));
-    const hasLiving = roomLabels.some(l => l.includes('living') || l.includes('lounge') || l.includes('studio'));
     const hasKitchen = roomLabels.some(l => l.includes('kitchen') || l.includes('cooking') || l.includes('studio'));
 
     if (rooms.length === 0) {

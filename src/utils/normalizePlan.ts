@@ -19,7 +19,6 @@ const MAX_ITEMS = 5000;
 /** Coordinate bounds in pixels. Anything outside is clipped, not dropped. */
 const COORD_LIMIT = 100_000;
 
-const OPENING_TYPES = new Set(['door', 'window']);
 const FURNITURE_CATEGORIES = new Set(['living', 'bedroom', 'kitchen', 'bathroom', 'outdoor']);
 
 function isRecord(v: unknown): v is Record<string, unknown> {

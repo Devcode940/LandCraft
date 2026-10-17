@@ -82,7 +82,6 @@ export default function FloorPlanCanvas({
   plan,
   setPlan,
   selectedElementId,
-  selectedElementType,
   setSelectedElementId,
   setSelectedElementType,
   activeTool,

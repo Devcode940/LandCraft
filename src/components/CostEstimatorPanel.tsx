@@ -1,12 +1,12 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { FloorPlanData, DimensionUnit } from '../types';
-import { X, DollarSign, Calculator, AlertTriangle, Lightbulb, Settings, Building2 } from 'lucide-react';
+import { useState, useMemo, useEffect } from 'react';
+import { FloorPlanData } from '../types';
+import { X, Calculator, AlertTriangle, Lightbulb, Settings, Building2 } from 'lucide-react';
 import { getWallBounds } from '../utils/geoUtils';
 import { apiPost } from '../utils/apiClient';
+import { useResetOnDeps } from '../hooks/useDerivedState';
 
 interface CostEstimatorPanelProps {
   plan: FloorPlanData;
-  unit: DimensionUnit;
   onClose: () => void;
 }
 
@@ -45,7 +45,7 @@ const REGION_MULTIPLIERS: Record<string, number> = {
   'global-average': 1.0,
 };
 
-export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimatorPanelProps) {
+export default function CostEstimatorPanel({ plan, onClose }: CostEstimatorPanelProps) {
   const [qualityLevel, setQualityLevel] = useState<'budget' | 'standard' | 'premium'>('standard');
   const [region, setRegion] = useState<string>('global-average');
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
@@ -128,10 +128,15 @@ export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimato
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
   };
 
+  // Enter the loading state the moment the inputs change, rather than one
+  // commit later inside an effect.
+  useResetOnDeps([metrics, qualityLevel, region, plan, costs.total, costs.subtotal], () => {
+    setIsLoadingAi(true);
+  });
+
   // Simulated AI Optimization
   useEffect(() => {
     let active = true;
-    setIsLoadingAi(true);
 
     const fetchOptimizations = async () => {
       try {
@@ -166,7 +171,7 @@ export default function CostEstimatorPanel({ plan, unit, onClose }: CostEstimato
           setAiSuggestions(staticSuggestions);
           setAiSuggestionSource('local');
         }
-      } catch (err) {
+      } catch {
         if (!active) return;
         setAiSuggestions([
           "Unable to reach AI Architect. Local static analysis active.",

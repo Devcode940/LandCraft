@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Trash2, RotateCw, ArrowLeftRight, Settings, Lock, Unlock, Ruler, Layers, Sparkles, Check, PanelRightClose } from 'lucide-react';
 import { Wall, Room, Opening, Furniture, DimensionUnit, LayerVisibility } from '../types';
 import { formatDimension, calculateRoomArea } from '../utils/geoUtils';
 import { suggestRoomName } from '../utils/roomAutoLabeler';
+import { useResetOnDeps } from '../hooks/useDerivedState';
 
 interface PropertyInspectorProps {
   selectedElement: any | null;
@@ -21,7 +22,6 @@ interface PropertyInspectorProps {
   onToggleWallLabels: () => void;
   furnitureList?: Furniture[];
   onOpenAutoLabeler?: () => void;
-  isOpen?: boolean;
   onToggle?: () => void;
 }
 
@@ -61,9 +61,13 @@ function NumberField({
   const [draft, setDraft] = useState(String(value));
   const [focused, setFocused] = useState(false);
 
-  useEffect(() => {
+  // Sync the draft back to the committed value while the field is not being
+  // typed into (sliders, undo, and AI edits all change `value` externally).
+  // Done during render rather than in an effect so the corrected number is
+  // painted once instead of flashing the stale value for a frame.
+  useResetOnDeps([value, focused], () => {
     if (!focused) setDraft(String(Math.round(value)));
-  }, [value, focused]);
+  });
 
   const commit = (raw: string) => {
     const n = Number(raw);
@@ -106,7 +110,6 @@ export default function PropertyInspector({
   onToggleWallLabels,
   furnitureList = [],
   onOpenAutoLabeler,
-  isOpen = true,
   onToggle,
 }: PropertyInspectorProps) {
   const inspectorBg = highContrast
