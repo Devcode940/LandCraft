@@ -179,6 +179,26 @@ rather than an accident.
 
 ## What shipped
 
+**Chat-driven edits (2026-10-18):** the architect chat can now modify the
+existing plan instead of only regenerating it. The model calls
+`edit_floor_plan` with a whitelisted, typed edit list (resize/move/relabel
+room, add/move furniture, add wall, delete element); `applyEdits`
+validates every item, applies the good ones through the same pure
+`planOps` helpers the canvas uses, and skips bad ones with a reason.
+Edits land as one undoable history step via a new `apply-edits` reducer
+action, so Ctrl+Z rolls back a whole AI edit. The reducer owns freshness,
+which let us delete the `planRef` latest-value pattern entirely.
+
+**Print / PDF (2026-10-18):** a Print / PDF button next to the SVG/JSON
+exporters. `printBlueprint` gives the CSS-sized SVG intrinsic dimensions
+and a viewBox for the printer and restores them on `afterprint`; a print
+stylesheet hides all chrome so the sheet carries only the blueprint.
+
+**Correction:** inline wall dimensions (with a toggle) and room
+area/perimeter in the inspector already existed; an earlier review pass
+listed them as missing based on a grep that missed the names
+(`effectiveShowWallLabels`, `calculateRoomArea`).
+
 Everything below was on this list and is now done.
 
 **Correctness** — `strict: true` plus `noUnusedLocals`/`noUnusedParameters`

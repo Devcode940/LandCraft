@@ -68,7 +68,7 @@ The app runs without a key. AI routes return `400 Missing API Key` and
 | `npm start` | Run the built server (`node dist/server.cjs`) |
 | `npm run typecheck` | `tsc --noEmit` under `strict` |
 | `npm run lint` | Typecheck + ESLint |
-| `npm test` | Vitest, 95 tests |
+| `npm test` | Vitest, 131 tests |
 | `npm run test:coverage` | Same, with V8 coverage over `src/lib` and `src/utils` |
 | `npm run format` | Prettier |
 | `npm run verify` | Typecheck + tests + build. Run this before pushing. |
@@ -169,7 +169,7 @@ exec-form `CMD`, so the signal arrives.
 npm test
 ```
 
-95 tests across seven files. The suite covers the parts where a mistake is
+131 tests across eleven files. The suite covers the parts where a mistake is
 silently wrong rather than visibly broken:
 
 | File | Covers |
@@ -182,6 +182,9 @@ silently wrong rather than visibly broken:
 | `components/Modal.test.tsx` | focus trap, Escape, focus restoration, scroll lock |
 | `components/ErrorBoundary.test.tsx` | fallbacks, panel variant, recovery |
 | `components/AutoLabelRoomsModal.test.tsx` | the panel still mounts and closes correctly inside `Modal` |
+| `components/ArchitectChatPanel.test.tsx` | chat applies structured edits, reports skips, still regenerates |
+| `components/Toolbar.test.tsx` | the three export paths are reachable |
+| `lib/printBlueprint.test.ts` | printer attributes set and restored |
 
 Not covered: canvas interaction (wall chains, snapping, drag bookkeeping), the
 AR viewer, and the AI panels themselves. Those need a browser, and the AI ones
