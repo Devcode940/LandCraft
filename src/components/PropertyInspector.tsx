@@ -25,6 +25,8 @@ import { useResetOnDeps } from '../hooks/useDerivedState';
 interface PropertyInspectorProps {
   selectedElement: FloorPlanElement['data'] | null;
   selectedType: 'wall' | 'room' | 'opening' | 'furniture' | null;
+  /** > 1 means a multi-selection: bulk actions only. */
+  selectionCount?: number;
   onUpdateElement: (
     type: 'wall' | 'room' | 'opening' | 'furniture',
     id: string,
@@ -117,6 +119,7 @@ function NumberField({
 export default function PropertyInspector({
   selectedElement,
   selectedType,
+  selectionCount = 1,
   onUpdateElement,
   onDeleteElement,
   unit,
@@ -210,6 +213,29 @@ export default function PropertyInspector({
       )}
     </div>
   );
+
+  // --- Multi-selection: bulk actions only ---
+  if (selectionCount > 1) {
+    return (
+      <div
+        id="inspector-container"
+        className={`w-64 shrink-0 p-4 flex flex-col h-full overflow-y-auto ${inspectorBg}`}
+      >
+        {header}
+        <div className="flex-1 flex flex-col items-center justify-center text-center p-6 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+          <Layers className="w-8 h-8 text-slate-300 dark:text-slate-700 mb-2.5" />
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            {selectionCount} elements selected
+          </p>
+          <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 max-w-[160px] mx-auto">
+            Drag to move them together, Ctrl+C to copy, Ctrl+D to duplicate,
+            Delete to remove. Shift+click adds or removes from the selection.
+          </p>
+        </div>
+        {layerPanel}
+      </div>
+    );
+  }
 
   // --- No selection: hint + layers ---
   if (!selectedElement || !selectedType) {

@@ -27,15 +27,20 @@ import {
 } from '../utils/geoUtils';
 import { suggestRoomName } from '../utils/roomAutoLabeler';
 import { MIN_ZOOM, MAX_ZOOM } from '../constants';
-import { moveRoomWithContents } from '../lib/planOps';
+import {
+  deleteElement,
+  moveElements,
+  moveRoomWithContents,
+  type ElementType,
+} from '../lib/planOps';
+import { isSelected, toggleId, type EditorSelection } from '../lib/selection';
 
 interface FloorPlanCanvasProps {
   plan: FloorPlanData;
   setPlan: (p: FloorPlanData | ((prev: FloorPlanData) => FloorPlanData)) => void;
-  selectedElementId: string | null;
-  selectedElementType: 'wall' | 'room' | 'opening' | 'furniture' | null;
-  setSelectedElementId: (id: string | null) => void;
-  setSelectedElementType: (t: 'wall' | 'room' | 'opening' | 'furniture' | null) => void;
+  selection: EditorSelection;
+  onSelectElement: (type: ElementType, id: string, additive: boolean) => void;
+  onClearSelection: () => void;
   activeTool: ToolType;
   setActiveTool: (tool: ToolType) => void;
   selectedPaletteItem: PaletteItem | null;
@@ -68,6 +73,10 @@ interface DragState {
   offset: Point;
   startMouse: Point;
   startPan: Point;
+  /** Every element in a group drag (single drags keep one id). */
+  elementIds: string[];
+  /** Positions at drag start, keyed by element id. */
+  originals: Map<string, Point>;
   /** Anchor point for a measurement drag. */
   measureStart: Point | null;
 }
@@ -85,14 +94,16 @@ const IDLE_DRAG: DragState = {
   startMouse: { x: 0, y: 0 },
   startPan: { x: 0, y: 0 },
   measureStart: null,
+  elementIds: [],
+  originals: new Map(),
 };
 
 export default function FloorPlanCanvas({
   plan,
   setPlan,
-  selectedElementId,
-  setSelectedElementId,
-  setSelectedElementType,
+  selection,
+  onSelectElement,
+  onClearSelection,
   activeTool,
   setActiveTool,
   selectedPaletteItem,
@@ -223,6 +234,31 @@ export default function FloorPlanCanvas({
       if (drag.mode !== 'element' || !drag.elementId || !drag.elementType) return;
 
       const id = drag.elementId;
+
+      // Group drag: the grabbed element follows the cursor with
+      // snapping, and every other selected element of the same
+      // type travels the same delta. Rooms still carry their
+      // contents, via the same primitive a single-room drag uses.
+      if (drag.elementIds.length > 1) {
+        const primaryOriginal = drag.originals.get(id);
+        if (primaryOriginal) {
+          let dx = 0;
+          let dy = 0;
+          if (drag.elementType === 'opening') {
+            const snapRes = snapOpeningToWalls(coords, s.plan.walls);
+            dx = snapRes.point.x - primaryOriginal.x;
+            dy = snapRes.point.y - primaryOriginal.y;
+          } else {
+            dx = snapped.x - drag.offset.x - primaryOriginal.x;
+            dy = snapped.y - drag.offset.y - primaryOriginal.y;
+          }
+          s.setPlan((prev) =>
+            moveElements(prev, drag.elementType as ElementType, drag.elementIds, dx, dy),
+          );
+        }
+        return;
+      }
+
       s.setPlan((prev) => {
         const next = { ...prev };
 
@@ -471,8 +507,7 @@ export default function FloorPlanCanvas({
 
     // 4. Normal interaction -- clicked empty space
     if (e.target === svgRef.current) {
-      setSelectedElementId(null);
-      setSelectedElementType(null);
+      onClearSelection();
       if (activeTool === 'select') startPan(e);
     }
   };
@@ -504,45 +539,81 @@ export default function FloorPlanCanvas({
         else if (type === 'furniture') next.furniture = prev.furniture.filter((f) => f.id !== id);
         return next;
       });
-      setSelectedElementId(null);
-      setSelectedElementType(null);
+      // The eraser removes the whole multi-selection when the
+      // clicked element belongs to it -- one stroke, one undo step.
+      if (selection.type === type && selection.ids.includes(id)) {
+        setPlan((prev) => {
+          let next = prev;
+          for (const selId of selection.ids) {
+            next = deleteElement(next, type, selId);
+          }
+          return next;
+        });
+      }
+      onClearSelection();
       onStateChange();
       return;
     }
 
     if (activeTool !== 'select') return;
 
-    setSelectedElementId(id);
-    setSelectedElementType(type);
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+    onSelectElement(type, id, additive);
+
+    // What this drag moves: the whole selection when the grabbed
+    // element belongs to it, otherwise just the grabbed element.
+    const nextSelection = additive ? toggleId(selection, type, id) : selection;
+    const dragIds =
+      nextSelection.type === type && nextSelection.ids.includes(id)
+        ? nextSelection.ids
+        : [id];
 
     const coords = getCanvasCoords(e.clientX, e.clientY);
+    const originals = new Map<string, Point>();
+    const record = (elId: string, x: number, y: number) =>
+      originals.set(elId, { x, y });
 
     if (type === 'room') {
       const rm = plan.rooms.find((r) => r.id === id);
       if (!rm) return;
+      plan.rooms.forEach((r) => {
+        if (dragIds.includes(r.id)) record(r.id, r.x, r.y);
+      });
       dragRef.current = {
         ...IDLE_DRAG,
         mode: 'element',
         elementType: 'room',
         elementId: id,
+        elementIds: dragIds,
+        originals,
         offset: { x: coords.x - rm.x, y: coords.y - rm.y },
       };
     } else if (type === 'furniture') {
       const fn = plan.furniture.find((f) => f.id === id);
       if (!fn) return;
+      plan.furniture.forEach((f) => {
+        if (dragIds.includes(f.id)) record(f.id, f.x, f.y);
+      });
       dragRef.current = {
         ...IDLE_DRAG,
         mode: 'element',
         elementType: 'furniture',
         elementId: id,
+        elementIds: dragIds,
+        originals,
         offset: { x: coords.x - fn.x, y: coords.y - fn.y },
       };
     } else if (type === 'opening') {
+      plan.openings.forEach((o) => {
+        if (dragIds.includes(o.id)) record(o.id, o.x, o.y);
+      });
       dragRef.current = {
         ...IDLE_DRAG,
         mode: 'element',
         elementType: 'opening',
         elementId: id,
+        elementIds: dragIds,
+        originals,
       };
     }
     // Walls are selected but not dragged from their body; use the endpoint
@@ -720,7 +791,7 @@ export default function FloorPlanCanvas({
           {/* 2. ROOM ZONES LAYER */}
           {layerVisibility.rooms &&
             plan.rooms.map((room) => {
-              const isSelected = selectedElementId === room.id;
+              const selected = isSelected(selection, 'room', room.id);
               return (
                 <g key={room.id} id={`group-room-${room.id}`}>
                   <rect
@@ -730,9 +801,9 @@ export default function FloorPlanCanvas({
                     width={room.width}
                     height={room.height}
                     fill={room.color}
-                    stroke={isSelected ? '#10b981' : highContrast ? 'black' : 'rgba(59, 130, 246, 0.2)'}
-                    strokeWidth={isSelected ? '2' : '1'}
-                    strokeDasharray={isSelected ? '5 5' : 'none'}
+                    stroke={selected ? '#10b981' : highContrast ? 'black' : 'rgba(59, 130, 246, 0.2)'}
+                    strokeWidth={selected ? '2' : '1'}
+                    strokeDasharray={selected ? '5 5' : 'none'}
                     onMouseDown={(e) => handleElementMouseDown(e, 'room', room.id)}
                     className="transition-colors hover:fill-emerald-500/5 cursor-pointer"
                   />
@@ -764,7 +835,7 @@ export default function FloorPlanCanvas({
                   </text>
 
                   {/* On-canvas Auto-Label suggestion chip when room is selected */}
-                  {isSelected &&
+                  {selected &&
                     (() => {
                       const suggestion = suggestRoomName(room, plan.furniture, unit);
                       if (suggestion.currentMatchesSuggestion) return null;
@@ -808,7 +879,7 @@ export default function FloorPlanCanvas({
                     })()}
 
                   {/* Resize Handle (bottom right corner) */}
-                  {isSelected && (
+                  {selected && (
                     <circle
                       cx={room.x + room.width}
                       cy={room.y + room.height}
@@ -827,7 +898,7 @@ export default function FloorPlanCanvas({
           {/* 3. STRUCTURAL WALLS LAYER */}
           {layerVisibility.walls &&
             plan.walls.map((wall) => {
-              const isSelected = selectedElementId === wall.id;
+              const selected = isSelected(selection, 'wall', wall.id);
               return (
                 <g key={wall.id} id={`group-wall-${wall.id}`}>
                   <line
@@ -836,7 +907,7 @@ export default function FloorPlanCanvas({
                     y1={wall.y1}
                     x2={wall.x2}
                     y2={wall.y2}
-                    stroke={isSelected ? '#10b981' : highContrast ? 'black' : '#334155'}
+                    stroke={selected ? '#10b981' : highContrast ? 'black' : '#334155'}
                     strokeWidth={wall.thickness}
                     strokeLinecap="round"
                     onMouseDown={(e) => handleElementMouseDown(e, 'wall', wall.id)}
@@ -878,7 +949,7 @@ export default function FloorPlanCanvas({
                               y1={midY}
                               x2={labelX}
                               y2={labelY}
-                              stroke={highContrast ? '#000000' : isSelected ? '#10b981' : '#64748b'}
+                              stroke={highContrast ? '#000000' : selected ? '#10b981' : '#64748b'}
                               strokeWidth="0.75"
                               strokeDasharray="2 2"
                               opacity="0.7"
@@ -891,8 +962,8 @@ export default function FloorPlanCanvas({
                                 height="20"
                                 rx="4"
                                 fill={highContrast ? '#ffffff' : '#0f172a'}
-                                stroke={highContrast ? '#000000' : isSelected ? '#10b981' : '#334155'}
-                                strokeWidth={highContrast ? '1.5' : isSelected ? '1.5' : '1'}
+                                stroke={highContrast ? '#000000' : selected ? '#10b981' : '#334155'}
+                                strokeWidth={highContrast ? '1.5' : selected ? '1.5' : '1'}
                                 opacity="0.96"
                                 className="filter drop-shadow-sm"
                               />
@@ -942,7 +1013,7 @@ export default function FloorPlanCanvas({
                       )}
 
                   {/* Drag joints handles at wall endpoints */}
-                  {isSelected && (
+                  {selected && (
                     <>
                       <circle
                         cx={wall.x1}
@@ -973,7 +1044,7 @@ export default function FloorPlanCanvas({
           {/* 4. DOORS & WINDOWS (OPENINGS) LAYER */}
           {layerVisibility.openings &&
             plan.openings.map((op) => {
-              const isSelected = selectedElementId === op.id;
+              const selected = isSelected(selection, 'opening', op.id);
 
               return (
                 <g
@@ -991,7 +1062,7 @@ export default function FloorPlanCanvas({
                         width={op.width}
                         height="8"
                         fill={highContrast ? 'white' : '#cbd5e1'}
-                        stroke={isSelected ? '#10b981' : highContrast ? 'black' : '#475569'}
+                        stroke={selected ? '#10b981' : highContrast ? 'black' : '#475569'}
                         strokeWidth="1.5"
                       />
                       <line
@@ -1011,7 +1082,7 @@ export default function FloorPlanCanvas({
                         y1="0"
                         x2={op.width}
                         y2="0"
-                        stroke={isSelected ? '#10b981' : highContrast ? 'black' : '#b45309'}
+                        stroke={selected ? '#10b981' : highContrast ? 'black' : '#b45309'}
                         strokeWidth="3.5"
                         transform={op.flipSwing ? 'scale(1, -1)' : 'none'}
                       />
@@ -1026,7 +1097,7 @@ export default function FloorPlanCanvas({
                     </>
                   )}
 
-                  {isSelected && (
+                  {selected && (
                     <rect
                       x={-op.width / 2 - 4}
                       y="-10"
@@ -1045,7 +1116,7 @@ export default function FloorPlanCanvas({
           {/* 5. FURNITURE & DECOR LAYER */}
           {layerVisibility.furniture &&
             plan.furniture.map((furn) => {
-              const isSelected = selectedElementId === furn.id;
+              const selected = isSelected(selection, 'furniture', furn.id);
 
               return (
                 <g
@@ -1064,7 +1135,7 @@ export default function FloorPlanCanvas({
                         height={furn.height}
                         rx="4"
                         fill={highContrast ? 'white' : '#f1f5f9'}
-                        stroke={isSelected ? '#10b981' : highContrast ? 'black' : '#94a3b8'}
+                        stroke={selected ? '#10b981' : highContrast ? 'black' : '#94a3b8'}
                         strokeWidth="1.5"
                       />
                       <line
@@ -1101,7 +1172,7 @@ export default function FloorPlanCanvas({
                         height={furn.height}
                         rx="3"
                         fill={highContrast ? 'white' : '#f8fafc'}
-                        stroke={isSelected ? '#10b981' : highContrast ? 'black' : '#94a3b8'}
+                        stroke={selected ? '#10b981' : highContrast ? 'black' : '#94a3b8'}
                         strokeWidth="1.5"
                       />
                       <line
@@ -1138,7 +1209,7 @@ export default function FloorPlanCanvas({
                         height={furn.height}
                         rx="2"
                         fill={highContrast ? 'white' : '#f1f5f9'}
-                        stroke={isSelected ? '#10b981' : highContrast ? 'black' : '#94a3b8'}
+                        stroke={selected ? '#10b981' : highContrast ? 'black' : '#94a3b8'}
                         strokeWidth="1.5"
                       />
                       <line
@@ -1163,7 +1234,7 @@ export default function FloorPlanCanvas({
                     {furn.label}
                   </text>
 
-                  {isSelected && (
+                  {selected && (
                     <rect
                       x={-furn.width / 2 - 5}
                       y={-furn.height / 2 - 5}

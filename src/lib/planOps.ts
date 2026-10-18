@@ -241,3 +241,66 @@ export function isPlanEmpty(plan: FloorPlanData): boolean {
 export function elementCount(plan: FloorPlanData): number {
   return plan.walls.length + plan.rooms.length + plan.openings.length + plan.furniture.length;
 }
+
+/**
+ * Move several elements of one type by the same delta -- the
+ * group-drag primitive. Unknown ids are ignored (the selection
+ * may reference elements deleted since it was made).
+ *
+ * Rooms move with their contents; walls move both endpoints.
+ */
+export function moveElements(
+  plan: FloorPlanData,
+  type: ElementType,
+  ids: readonly string[],
+  dx: number,
+  dy: number,
+): FloorPlanData {
+  if (ids.length === 0 || (dx === 0 && dy === 0)) return plan;
+  const idSet = new Set(ids);
+
+  switch (type) {
+    case 'room': {
+      // moveRoomWithContents returns the same reference when the
+      // room is absent, so folding over it is safe.
+      let next = plan;
+      plan.rooms.forEach((r) => {
+        if (idSet.has(r.id)) next = moveRoomWithContents(next, r.id, r.x + dx, r.y + dy);
+      });
+      return next;
+    }
+    case 'furniture': {
+      // Preserve reference identity when nothing matches, so the
+      // editor reducer records no history entry for a no-op drag.
+      if (!plan.furniture.some((f) => idSet.has(f.id))) return plan;
+      return {
+        ...plan,
+        furniture: plan.furniture.map((f) =>
+          idSet.has(f.id) ? { ...f, x: f.x + dx, y: f.y + dy } : f,
+        ),
+      };
+    }
+    case 'wall': {
+      if (!plan.walls.some((w) => idSet.has(w.id))) return plan;
+      return {
+        ...plan,
+        walls: plan.walls.map((w) =>
+          idSet.has(w.id)
+            ? { ...w, x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy }
+            : w,
+        ),
+      };
+    }
+    case 'opening': {
+      if (!plan.openings.some((o) => idSet.has(o.id))) return plan;
+      return {
+        ...plan,
+        openings: plan.openings.map((o) =>
+          idSet.has(o.id) ? { ...o, x: o.x + dx, y: o.y + dy } : o,
+        ),
+      };
+    }
+    default:
+      return plan;
+  }
+}

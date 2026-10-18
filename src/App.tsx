@@ -17,6 +17,9 @@ import {
   Room,
 } from './types';
 import { starterPlans } from './utils/sampleData';
+
+/** Above this many elements the live overlap scan is skipped. */
+const OVERLAP_SCAN_LIMIT = 600;
 import { normalizePlan } from './utils/normalizePlan';
 import { editorReducer, initEditorState, type EditorState } from './lib/editorState';
 import {
@@ -30,6 +33,15 @@ import {
 } from './lib/planOps';
 import { applyEdits, type EditResult } from './lib/planEdits';
 import { printBlueprint } from './lib/printBlueprint';
+import {
+  copyElements,
+  PASTE_OFFSET_PX,
+  pasteElements,
+  type Clipboard,
+} from './lib/clipboardOps';
+import { EMPTY_SELECTION, toggleId, type EditorSelection } from './lib/selection';
+import { checkOverlapWarnings } from './utils/geoUtils';
+import { elementCount } from './lib/planOps';
 import { clearStoredPlan, loadPlanLocally, parsePlanFile, savePlanLocally } from './lib/persistence';
 import { downloadBlob } from './lib/download';
 
@@ -71,10 +83,21 @@ export default function App() {
   const [state, dispatch] = useReducer(editorReducer, undefined, createInitialEditorState);
   const { plan, entries, index } = state;
 
-  const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
-  const [selectedElementType, setSelectedElementType] = useState<
-    'wall' | 'room' | 'opening' | 'furniture' | null
-  >(null);
+  // One source of truth for selection: a set of ids of a single
+  // element type. (Two useStates could disagree -- a wall id with a
+  // room type -- which the inspector would then render as nonsense.)
+  const [selection, setSelection] = useState<EditorSelection>(EMPTY_SELECTION);
+
+  const selectSingleElement = useCallback(
+    (type: ElementType, id: string) => setSelection({ type, ids: [id] }),
+    [],
+  );
+  const toggleSelectedElement = useCallback(
+    (type: ElementType, id: string) =>
+      setSelection((sel) => toggleId(sel, type, id)),
+    [],
+  );
+  const clearSelection = useCallback(() => setSelection(EMPTY_SELECTION), []);
   const [activeTool, setActiveTool] = useState<ToolType>('select');
   const [selectedPaletteItem, setSelectedPaletteItem] = useState<PaletteItem | null>(null);
 
@@ -173,9 +196,8 @@ export default function App() {
    */
   const loadPlan = useCallback((incoming: unknown) => {
     dispatch({ type: 'set', plan: normalizePlan(incoming), commit: true });
-    setSelectedElementId(null);
-    setSelectedElementType(null);
-  }, []);
+    clearSelection();
+  }, [clearSelection]);
 
   /**
    * Apply structured edits from the architect chat. The reducer
@@ -201,9 +223,8 @@ export default function App() {
     // Drop the autosave too, otherwise refreshing right after a Clear would
     // quietly bring the starter plan back.
     clearStoredPlan();
-    setSelectedElementId(null);
-    setSelectedElementType(null);
-  }, []);
+    clearSelection();
+  }, [clearSelection]);
 
   const handleLoadSample = useCallback(
     (key: string) => {
@@ -267,11 +288,53 @@ export default function App() {
   const handleDeleteElement = useCallback(
     (type: 'wall' | 'room' | 'opening' | 'furniture', id: string) => {
       updatePlanAndCommit((prev) => deleteElement(prev, type, id));
-      setSelectedElementId(null);
-      setSelectedElementType(null);
+      setSelection(EMPTY_SELECTION);
     },
     [updatePlanAndCommit],
   );
+
+  /** Delete every selected element in one undoable step. */
+  const handleDeleteSelection = useCallback(() => {
+    if (!selection.type || selection.ids.length === 0) return;
+    const { type, ids } = selection;
+    updatePlanAndCommit((prev) => {
+      let next = prev;
+      for (const id of ids) next = deleteElement(next, type, id);
+      return next;
+    });
+    setSelection(EMPTY_SELECTION);
+  }, [selection, updatePlanAndCommit]);
+
+  // -------------------------------------------------------------------------
+  // Clipboard: copy / cut / paste / duplicate
+  // -------------------------------------------------------------------------
+  const clipboardRef = useRef<Clipboard | null>(null);
+  /** Successive pastes stack one cell apart instead of coinciding. */
+  const pasteCountRef = useRef(0);
+
+  const handleCopy = useCallback(() => {
+    if (!selection.type || selection.ids.length === 0) return;
+    clipboardRef.current = copyElements(plan, selection.type, selection.ids);
+    pasteCountRef.current = 0;
+  }, [plan, selection]);
+
+  const handlePaste = useCallback(() => {
+    const clip = clipboardRef.current;
+    if (!clip) return;
+    pasteCountRef.current += 1;
+    const offset = PASTE_OFFSET_PX * pasteCountRef.current;
+    updatePlanAndCommit((prev) => pasteElements(prev, clip, offset));
+  }, [updatePlanAndCommit]);
+
+  const handleCut = useCallback(() => {
+    handleCopy();
+    handleDeleteSelection();
+  }, [handleCopy, handleDeleteSelection]);
+
+  const handleDuplicate = useCallback(() => {
+    handleCopy();
+    handlePaste();
+  }, [handleCopy, handlePaste]);
 
   /**
    * Place a palette preset at the centre of the viewport.
@@ -347,10 +410,22 @@ export default function App() {
     [updatePlanAndCommit, panX, panY, zoom],
   );
 
+  // The inspector edits one element's fields; with several
+  // selected it shows a bulk view instead, so the derived
+  // element is only defined for a single selection.
   const getSelectedElementData = useMemo(() => {
-    if (!selectedElementId || !selectedElementType) return null;
-    return findElement(plan, selectedElementType, selectedElementId);
-  }, [plan, selectedElementId, selectedElementType]);
+    if (!selection.type || selection.ids.length !== 1) return null;
+    return findElement(plan, selection.type, selection.ids[0]);
+  }, [plan, selection]);
+
+  // Live collision feedback. The AI audit panel has always run this
+  // check on demand; the canvas now runs it on every change so a
+  // misplaced sofa is visible immediately, not after asking the AI.
+  // O(n^2) -- skipped for pathological plans.
+  const overlapWarnings = useMemo(() => {
+    if (elementCount(plan) > OVERLAP_SCAN_LIMIT) return [];
+    return checkOverlapWarnings(plan.rooms, plan.openings, plan.furniture);
+  }, [plan]);
 
   // -------------------------------------------------------------------------
   // Statistics
@@ -401,6 +476,32 @@ export default function App() {
         return;
       }
 
+      // Clipboard shortcuts. While typing they must stay with the
+      // text field (Ctrl+C copies the text, not the element).
+      if (mod && !e.shiftKey && !e.altKey && !isTyping) {
+        const key = e.key.toLowerCase();
+        if (key === 'c') {
+          e.preventDefault();
+          handleCopy();
+          return;
+        }
+        if (key === 'x') {
+          e.preventDefault();
+          handleCut();
+          return;
+        }
+        if (key === 'v') {
+          e.preventDefault();
+          handlePaste();
+          return;
+        }
+        if (key === 'd') {
+          e.preventDefault();
+          handleDuplicate();
+          return;
+        }
+      }
+
       // Everything below is a bare-key shortcut, so it must not fire while the
       // user is typing in the inspector or the chat box.
       if (isTyping || mod || e.altKey) return;
@@ -408,14 +509,13 @@ export default function App() {
       switch (e.key) {
         case 'Delete':
         case 'Backspace':
-          if (selectedElementId && selectedElementType) {
+          if (selection.type && selection.ids.length > 0) {
             e.preventDefault();
-            handleDeleteElement(selectedElementType, selectedElementId);
+            handleDeleteSelection();
           }
           break;
         case 'Escape':
-          setSelectedElementId(null);
-          setSelectedElementType(null);
+          clearSelection();
           break;
         case 'v':
         case 'V':
@@ -455,12 +555,14 @@ export default function App() {
   }, [
     handleRedo,
     handleUndo,
-    handleDeleteElement,
-    selectedElementId,
-    selectedElementType,
+    handleDeleteSelection,
+    handleCopy,
+    handleCut,
+    handlePaste,
+    handleDuplicate,
+    clearSelection,
+    selection,
     setActiveTool,
-    setSelectedElementId,
-    setSelectedElementType,
   ]);
 
   // -------------------------------------------------------------------------
@@ -514,14 +616,13 @@ export default function App() {
     try {
       const parsed = parsePlanFile(await file.text());
       dispatch({ type: 'set', plan: parsed, commit: true });
-      setSelectedElementId(null);
-      setSelectedElementType(null);
+      clearSelection();
     } catch (error) {
       // parsePlanFile throws user-facing messages; never leak a stack trace
       // into the UI for what is almost always a wrong-file mistake.
       setImportError(error instanceof Error ? error.message : 'That file could not be read.');
     }
-  }, []);
+  }, [clearSelection]);
 
   // -------------------------------------------------------------------------
   // Exports
@@ -689,14 +790,41 @@ export default function App() {
             setZoom={setZoom}
           />
 
+          {/* Live collision feedback: furniture on furniture, rooms
+              stacked on rooms. Computed on every plan change, so
+              problems are visible while drafting, not only when the
+              AI audit panel is asked to check. */}
+          {overlapWarnings.length > 0 && (
+            <div
+              role="alert"
+              className="mx-2 mb-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400"
+            >
+              <span className="font-bold">
+                {overlapWarnings.length} layout conflict
+                {overlapWarnings.length === 1 ? '' : 's'}
+              </span>
+              <ul className="mt-0.5 list-disc pl-4 space-y-0.5">
+                {overlapWarnings.slice(0, 3).map((w) => (
+                  <li key={w.id}>{w.message}</li>
+                ))}
+              </ul>
+              {overlapWarnings.length > 3 && (
+                <span className="text-amber-600/80 dark:text-amber-400/80">
+                  +{overlapWarnings.length - 3} more
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Interactive Blueprint drafting board */}
           <FloorPlanCanvas
             plan={plan}
             setPlan={updatePlan}
-            selectedElementId={selectedElementId}
-            selectedElementType={selectedElementType}
-            setSelectedElementId={setSelectedElementId}
-            setSelectedElementType={setSelectedElementType}
+            selection={selection}
+            onSelectElement={(type, id, additive) =>
+              additive ? toggleSelectedElement(type, id) : selectSingleElement(type, id)
+            }
+            onClearSelection={clearSelection}
             activeTool={activeTool}
             setActiveTool={setActiveTool}
             selectedPaletteItem={selectedPaletteItem}
@@ -729,7 +857,8 @@ export default function App() {
           <ErrorBoundary variant="panel">
             <PropertyInspector
               selectedElement={getSelectedElementData}
-              selectedType={selectedElementType}
+              selectedType={selection.type}
+              selectionCount={selection.ids.length}
               onUpdateElement={handleUpdateElement}
               onDeleteElement={handleDeleteElement}
               unit={unit}
