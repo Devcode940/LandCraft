@@ -16,3 +16,30 @@
  * it whenever High Contrast is on.
  */
 @custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Print output: the blueprint is the only thing that goes on paper.
+ * Everything else (toolbar, palettes, panels, chat) is hidden via
+ * visibility so the page layout does not reflow, and the SVG is
+ * pulled out of flow to fill the sheet. The handler in App.tsx
+ * gives the SVG intrinsic dimensions and a viewBox first, so the
+ * browser fits the current canvas view to the page.
+ */
+@page {
+  margin: 10mm;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #interactive-blueprint-svg,
+  #interactive-blueprint-svg * {
+    visibility: visible;
+  }
+  #interactive-blueprint-svg {
+    position: fixed;
+    inset: 0;
+    background: white;
+  }
+}

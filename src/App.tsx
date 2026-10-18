@@ -29,6 +29,7 @@ import {
   type ElementType,
 } from './lib/planOps';
 import { applyEdits, type EditResult } from './lib/planEdits';
+import { printBlueprint } from './lib/printBlueprint';
 import { clearStoredPlan, loadPlanLocally, parsePlanFile, savePlanLocally } from './lib/persistence';
 import { downloadBlob } from './lib/download';
 
@@ -555,6 +556,11 @@ export default function App() {
     );
   }, []);
 
+  const handlePrint = useCallback(() => {
+    const svgElement = document.querySelector<SVGSVGElement>('#interactive-blueprint-svg');
+    if (svgElement) printBlueprint(svgElement);
+  }, []);
+
   // -------------------------------------------------------------------------
 
   const mainShellStyle = highContrast
@@ -670,6 +676,7 @@ export default function App() {
             onLoadSample={handleLoadSample}
             onExportJson={handleExportJson}
             onExportSvg={handleExportSvg}
+            onPrint={handlePrint}
             onImportJson={handleImportJson}
             onOpenAR={() => setIsARViewerOpen(true)}
             onOpenEstimator={() => setIsEstimatorOpen(true)}

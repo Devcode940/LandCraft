@@ -10,6 +10,7 @@ import {
   Trash2,
   Grid,
   Download,
+  Printer,
   Upload,
   FileCode,
   Eye as HighContrastIcon,
@@ -48,6 +49,7 @@ interface ToolbarProps {
   onLoadSample: (planKey: string) => void;
   onExportJson: () => void;
   onExportSvg: () => void;
+  onPrint: () => void;
   onImportJson?: (file: File) => void;
   onOpenAR: () => void;
   onOpenEstimator: () => void;
@@ -123,6 +125,7 @@ export default function Toolbar({
   onLoadSample,
   onExportJson,
   onExportSvg,
+  onPrint,
   onImportJson,
   onOpenAR,
   onOpenEstimator,
@@ -389,6 +392,16 @@ export default function Toolbar({
         >
           <Download className="w-4 h-4 text-emerald-500" />
           <span className="hidden sm:inline">Export SVG</span>
+        </button>
+
+        <button
+          id="print-btn"
+          onClick={onPrint}
+          className={accentButtonClass(highContrast, 'emerald')}
+          title="Print or save the current view as a PDF"
+        >
+          <Printer className="w-4 h-4 text-emerald-500" />
+          <span className="hidden sm:inline">Print / PDF</span>
         </button>
 
         <button
