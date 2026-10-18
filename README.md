@@ -68,7 +68,7 @@ The app runs without a key. AI routes return `400 Missing API Key` and
 | `npm start` | Run the built server (`node dist/server.cjs`) |
 | `npm run typecheck` | `tsc --noEmit` under `strict` |
 | `npm run lint` | Typecheck + ESLint |
-| `npm test` | Vitest, 149 tests |
+| `npm test` | Vitest, 178 tests |
 | `npm run test:coverage` | Same, with V8 coverage over `src/lib` and `src/utils` |
 | `npm run format` | Prettier |
 | `npm run verify` | Typecheck + tests + build. Run this before pushing. |
@@ -169,7 +169,7 @@ exec-form `CMD`, so the signal arrives.
 npm test
 ```
 
-149 tests across thirteen files. The suite covers the parts where a mistake is
+178 tests across sixteen files. The suite covers the parts where a mistake is
 silently wrong rather than visibly broken:
 
 | File | Covers |
@@ -187,6 +187,8 @@ silently wrong rather than visibly broken:
 | `lib/printBlueprint.test.ts` | printer attributes set and restored |
 | `lib/selection.test.ts` | multi-select toggle semantics |
 | `lib/clipboardOps.test.ts` | copy/paste id regeneration, offsets, group moves |
+| `lib/wallSplit.test.ts` | wall splitting, gap clamping, segment dropping |
+| `lib/schedule.test.ts` | room schedule math, CSV quoting |
 
 Not covered: canvas interaction (wall chains, snapping, drag bookkeeping), the
 AR viewer, and the AI panels themselves. Those need a browser, and the AI ones

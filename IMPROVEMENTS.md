@@ -179,6 +179,13 @@ rather than an accident.
 
 ## What shipped
 
+**Drafting accelerators (2026-10-18):**
+Numeric wall length (type an exact dimension while
+drafting; the typed value is the spec, so it is not
+grid-snapped), repeat placement (P), split wall &
+insert door in the wall inspector, and a room
+schedule modal with CSV export.
+
 **Multi-select, clipboard, live collisions (2026-10-18):**
 Shift/Ctrl+click selects several elements of one type and
 drags them as a group (rooms still carry their contents);
