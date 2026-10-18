@@ -179,6 +179,18 @@ rather than an accident.
 
 ## What shipped
 
+**Multi-select, clipboard, live collisions (2026-10-18):**
+Shift/Ctrl+click selects several elements of one type and
+drags them as a group (rooms still carry their contents);
+the eraser clears a whole selection in one undo step.
+Ctrl+C/X/V/D copy, cut, paste and duplicate -- pasted
+elements get fresh ids and a stacking offset, and openings
+lose their wall pin. `checkOverlapWarnings` now runs on
+every plan change (skipped above 600 elements) and shows
+an amber strip, instead of only inside the AI audit panel.
+
+**Chat-driven edits (2026-10-18):**
+
 **Chat-driven edits (2026-10-18):** the architect chat can now modify the
 existing plan instead of only regenerating it. The model calls
 `edit_floor_plan` with a whitelisted, typed edit list (resize/move/relabel
