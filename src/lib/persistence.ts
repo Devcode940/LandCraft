@@ -95,6 +95,34 @@ export function clearStoredPlan(): void {
   }
 }
 
+/**
+ * Whether the AI workbench was last minimized. The workbench
+ * is a large bottom panel; users who only need it occasionally
+ * should not have to collapse it on every visit.
+ */
+const WORKBENCH_MINIMIZED_KEY = 'landcraft:workbench-minimized';
+
+export function loadWorkbenchMinimized(): boolean {
+  const store = safeStorage();
+  if (!store) return false;
+  try {
+    return store.getItem(WORKBENCH_MINIMIZED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveWorkbenchMinimized(minimized: boolean): void {
+  const store = safeStorage();
+  if (!store) return;
+  try {
+    if (minimized) store.setItem(WORKBENCH_MINIMIZED_KEY, '1');
+    else store.removeItem(WORKBENCH_MINIMIZED_KEY);
+  } catch {
+    /* storage full or blocked -- the flag simply does not persist */
+  }
+}
+
 /** Parse a user-supplied .json export. Throws with a user-facing message. */
 export function parsePlanFile(text: string): FloorPlanData {
   let parsed: unknown;

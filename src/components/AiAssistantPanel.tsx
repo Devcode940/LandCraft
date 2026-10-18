@@ -15,6 +15,7 @@ import {
   Sliders,
   ChevronUp,
   ChevronDown,
+  Minimize2,
   Layout,
   Clock,
   Check,
@@ -25,6 +26,7 @@ import {
 import { FloorPlanData, AIReviewItem, DimensionUnit } from '../types';
 import { checkOverlapWarnings } from '../utils/geoUtils';
 import { apiPost } from '../utils/apiClient';
+import { loadWorkbenchMinimized, saveWorkbenchMinimized } from '../lib/persistence';
 import { useResetOnDeps } from '../hooks/useDerivedState';
 import { normalizePlan } from '../utils/normalizePlan';
 
@@ -123,6 +125,13 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
   // Navigation & Sizing
   const [activeTab, setActiveTab] = useState<'generator' | 'photo' | 'audit'>('generator');
   const [isExpanded, setIsExpanded] = useState(true);
+  // Minimized docks the workbench to a small launcher button.
+  // Persisted: a panel this large should not re-open uninvited
+  // on every visit once the user has dismissed it.
+  const [isMinimized, setIsMinimized] = useState(loadWorkbenchMinimized);
+  useEffect(() => {
+    saveWorkbenchMinimized(isMinimized);
+  }, [isMinimized]);
 
   // Form Parameters State
   const [promptInput, setPromptInput] = useState('');
@@ -525,6 +534,21 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
       : 'bg-slate-800 text-slate-300 hover:bg-slate-700 px-2.5 py-1 rounded-md text-[10px]';
   };
 
+  // Docked: a small launcher, not a 460px bar.
+  if (isMinimized) {
+    return (
+      <button
+        id="ai-workbench-launcher"
+        onClick={() => setIsMinimized(false)}
+        className="fixed bottom-6 left-6 z-[90] flex items-center gap-2 px-4 py-2.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white shadow-2xl transition-transform hover:scale-105 cursor-pointer"
+        title="Open AI Assistant Workbench"
+      >
+        <Sparkles className="w-4 h-4" />
+        <span className="text-xs font-bold">AI Assistant</span>
+      </button>
+    );
+  }
+
   return (
     <div
       id="ai-assistant-panel"
@@ -597,9 +621,18 @@ export default function AiAssistantPanel({ plan, unit, highContrast, onLoadPlan 
                 : 'Active Compliance Diagnostics'}
           </span>
           <button
+            onClick={() => setIsMinimized(true)}
+            className="p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer"
+            title="Minimize workbench"
+            aria-label="Minimize workbench"
+          >
+            <Minimize2 className="w-4 h-4" />
+          </button>
+          <button
             onClick={() => setIsExpanded(!isExpanded)}
             className="p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors cursor-pointer"
             title={isExpanded ? 'Collapse Workbench' : 'Expand Workbench'}
+            aria-label={isExpanded ? 'Collapse workbench' : 'Expand workbench'}
           >
             {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
           </button>

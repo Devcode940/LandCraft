@@ -4,7 +4,14 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { clearStoredPlan, loadPlanLocally, parsePlanFile, savePlanLocally } from './persistence';
+import {
+  clearStoredPlan,
+  loadPlanLocally,
+  loadWorkbenchMinimized,
+  parsePlanFile,
+  savePlanLocally,
+  saveWorkbenchMinimized,
+} from './persistence';
 import { emptyPlan } from './planOps';
 import type { FloorPlanData } from '../types';
 
@@ -102,5 +109,20 @@ describe('parsePlanFile', () => {
     const plan = parsePlanFile(JSON.stringify({ rooms: [{ id: 'r', width: -99, height: 'x' }] }));
     expect(plan.rooms[0].width).toBeGreaterThanOrEqual(1);
     expect(Number.isFinite(plan.rooms[0].height)).toBe(true);
+  });
+});
+
+describe('workbench minimize flag', () => {
+  it('defaults to false and round-trips', () => {
+    expect(loadWorkbenchMinimized()).toBe(false);
+    saveWorkbenchMinimized(true);
+    expect(loadWorkbenchMinimized()).toBe(true);
+    saveWorkbenchMinimized(false);
+    expect(loadWorkbenchMinimized()).toBe(false);
+  });
+
+  it('stores nothing when not minimized', () => {
+    saveWorkbenchMinimized(false);
+    expect(localStorage.getItem('landcraft:workbench-minimized')).toBeNull();
   });
 });

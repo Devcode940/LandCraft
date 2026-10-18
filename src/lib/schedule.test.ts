@@ -57,6 +57,6 @@ describe('scheduleToCsv', () => {
 
   it('ends with the total row', () => {
     const csv = scheduleToCsv(roomSchedule(plan, 'm'));
-    expect(csv.trimEnd().split('\n').pop()).toBe('Total,, ,100.0 m²,');
+    expect(csv.trimEnd().split('\n').pop()).toBe('Total,,,100.0 m²,');
   });
 });

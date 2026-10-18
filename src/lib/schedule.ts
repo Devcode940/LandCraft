@@ -59,5 +59,5 @@ export function scheduleToCsv(schedule: RoomSchedule): string {
   const lines = schedule.rows.map((r) =>
     [r.label, r.width, r.height, r.area, r.perimeter].map(escape).join(','),
   );
-  return [header, ...lines, '', `Total,, ,${schedule.totalArea},`].join('\n');
+  return [header, ...lines, '', `Total,,,${schedule.totalArea},`].join('\n');
 }
