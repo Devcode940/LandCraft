@@ -32,11 +32,7 @@ export function selectSingle(type: ElementType, id: string): EditorSelection {
  * same type. Clicking a different type starts a fresh selection --
  * mixing types would leave the inspector with nothing coherent to edit.
  */
-export function toggleId(
-  selection: EditorSelection,
-  type: ElementType,
-  id: string,
-): EditorSelection {
+export function toggleId(selection: EditorSelection, type: ElementType, id: string): EditorSelection {
   if (selection.type !== type) return selectSingle(type, id);
   return selection.ids.includes(id)
     ? { type, ids: selection.ids.filter((i) => i !== id) }

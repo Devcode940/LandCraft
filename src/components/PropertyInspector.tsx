@@ -33,6 +33,8 @@ interface PropertyInspectorProps {
     updatedData: Partial<Wall & Room & Opening & Furniture>,
   ) => void;
   onDeleteElement: (type: 'wall' | 'room' | 'opening' | 'furniture', id: string) => void;
+  /** Split the selected wall and insert a door in the gap. */
+  onSplitWall?: (wallId: string) => void;
   unit: DimensionUnit;
   highContrast: boolean;
   layerVisibility: LayerVisibility;
@@ -122,6 +124,7 @@ export default function PropertyInspector({
   selectionCount = 1,
   onUpdateElement,
   onDeleteElement,
+  onSplitWall,
   unit,
   highContrast,
   layerVisibility,
@@ -228,8 +231,8 @@ export default function PropertyInspector({
             {selectionCount} elements selected
           </p>
           <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 max-w-[160px] mx-auto">
-            Drag to move them together, Ctrl+C to copy, Ctrl+D to duplicate,
-            Delete to remove. Shift+click adds or removes from the selection.
+            Drag to move them together, Ctrl+C to copy, Ctrl+D to duplicate, Delete to remove. Shift+click
+            adds or removes from the selection.
           </p>
         </div>
         {layerPanel}
@@ -345,6 +348,17 @@ export default function PropertyInspector({
                 </div>
               </div>
             </div>
+
+            {onSplitWall && (
+              <button
+                type="button"
+                onClick={() => onSplitWall((selectedElement as Wall).id)}
+                className="w-full px-2.5 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] cursor-pointer transition-colors"
+                title="Replace this wall with two segments and a standard door in the gap"
+              >
+                Split Wall &amp; Insert Door
+              </button>
+            )}
 
             <div className="p-2.5 bg-slate-100 dark:bg-slate-800/40 rounded-lg space-y-1.5 text-[10px] text-slate-500">
               <p className="font-semibold text-slate-700 dark:text-slate-300">💡 Designer Tip</p>

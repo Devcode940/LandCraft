@@ -33,15 +33,11 @@ import {
 } from './lib/planOps';
 import { applyEdits, type EditResult } from './lib/planEdits';
 import { printBlueprint } from './lib/printBlueprint';
-import {
-  copyElements,
-  PASTE_OFFSET_PX,
-  pasteElements,
-  type Clipboard,
-} from './lib/clipboardOps';
+import { copyElements, PASTE_OFFSET_PX, pasteElements, type Clipboard } from './lib/clipboardOps';
 import { EMPTY_SELECTION, toggleId, type EditorSelection } from './lib/selection';
 import { checkOverlapWarnings } from './utils/geoUtils';
-import { elementCount } from './lib/planOps';
+import { elementCount, splitWallWithOpening } from './lib/planOps';
+import RoomSchedulePanel from './components/RoomSchedulePanel';
 import { clearStoredPlan, loadPlanLocally, parsePlanFile, savePlanLocally } from './lib/persistence';
 import { downloadBlob } from './lib/download';
 
@@ -93,8 +89,7 @@ export default function App() {
     [],
   );
   const toggleSelectedElement = useCallback(
-    (type: ElementType, id: string) =>
-      setSelection((sel) => toggleId(sel, type, id)),
+    (type: ElementType, id: string) => setSelection((sel) => toggleId(sel, type, id)),
     [],
   );
   const clearSelection = useCallback(() => setSelection(EMPTY_SELECTION), []);
@@ -130,6 +125,7 @@ export default function App() {
 
   const [isARViewerOpen, setIsARViewerOpen] = useState(false);
   const [isEstimatorOpen, setIsEstimatorOpen] = useState(false);
+  const [isScheduleOpen, setIsScheduleOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isAutoLabelModalOpen, setIsAutoLabelModalOpen] = useState(false);
 
@@ -194,10 +190,13 @@ export default function App() {
    * Load a plan from an external source (AI variant, starter template, chat
    * tool call). Always normalized: model output is not a structural guarantee.
    */
-  const loadPlan = useCallback((incoming: unknown) => {
-    dispatch({ type: 'set', plan: normalizePlan(incoming), commit: true });
-    clearSelection();
-  }, [clearSelection]);
+  const loadPlan = useCallback(
+    (incoming: unknown) => {
+      dispatch({ type: 'set', plan: normalizePlan(incoming), commit: true });
+      clearSelection();
+    },
+    [clearSelection],
+  );
 
   /**
    * Apply structured edits from the architect chat. The reducer
@@ -293,6 +292,26 @@ export default function App() {
     [updatePlanAndCommit],
   );
 
+  /**
+   * Split a wall into two segments with a door in the
+   * gap. Defaults describe a standard interior door;
+   * the split point is the wall midpoint.
+   */
+  const handleSplitWall = useCallback(
+    (wallId: string) => {
+      updatePlanAndCommit((prev) =>
+        splitWallWithOpening(prev, wallId, {
+          ratio: 0.5,
+          gapWidth: 80, // 2 m at 40 px/m
+          openingType: 'door',
+          openingSubType: 'standard',
+          openingWidth: 60, // 1.5 m door leaf
+        }),
+      );
+    },
+    [updatePlanAndCommit],
+  );
+
   /** Delete every selected element in one undoable step. */
   const handleDeleteSelection = useCallback(() => {
     if (!selection.type || selection.ids.length === 0) return;
@@ -345,6 +364,17 @@ export default function App() {
    * StrictMode double-invoke created two elements sharing one id. Immutable
    * spread + id inside the updater fixes both.
    */
+  /** Last palette placement, so 'p' can repeat it. State,
+      not a ref: the Repeat button must enable when it lands. */
+  const [lastPlaced, setLastPlaced] = useState<{
+    type: 'room' | 'opening' | 'furniture';
+    subType: string;
+    label: string;
+    width?: number;
+    height?: number;
+    extra?: { color?: string; category?: string };
+  } | null>(null);
+
   const handleInstantAdd = useCallback(
     (
       type: 'room' | 'opening' | 'furniture',
@@ -354,6 +384,7 @@ export default function App() {
       height?: number,
       extra?: { color?: string; category?: string },
     ) => {
+      setLastPlaced({ type, subType, label, width, height, extra });
       const centerX = Math.round((400 - panX) / zoom);
       const centerY = Math.round((250 - panY) / zoom);
 
@@ -417,6 +448,19 @@ export default function App() {
     if (!selection.type || selection.ids.length !== 1) return null;
     return findElement(plan, selection.type, selection.ids[0]);
   }, [plan, selection]);
+
+  /** Stamp the last palette placement again, at the viewport centre. */
+  const handleRepeatPlacement = useCallback(() => {
+    if (!lastPlaced) return;
+    handleInstantAdd(
+      lastPlaced.type,
+      lastPlaced.subType,
+      lastPlaced.label,
+      lastPlaced.width,
+      lastPlaced.height,
+      lastPlaced.extra,
+    );
+  }, [handleInstantAdd, lastPlaced]);
 
   // Live collision feedback. The AI audit panel has always run this
   // check on demand; the canvas now runs it on every change so a
@@ -541,6 +585,10 @@ export default function App() {
         case 'F':
           setActiveTool('furniture');
           break;
+        case 'p':
+        case 'P':
+          handleRepeatPlacement();
+          break;
         case 'm':
         case 'M':
           setActiveTool('measure');
@@ -560,6 +608,7 @@ export default function App() {
     handleCut,
     handlePaste,
     handleDuplicate,
+    handleRepeatPlacement,
     clearSelection,
     selection,
     setActiveTool,
@@ -611,18 +660,21 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [importError]);
 
-  const handleImportJson = useCallback(async (file: File) => {
-    setImportError(null);
-    try {
-      const parsed = parsePlanFile(await file.text());
-      dispatch({ type: 'set', plan: parsed, commit: true });
-      clearSelection();
-    } catch (error) {
-      // parsePlanFile throws user-facing messages; never leak a stack trace
-      // into the UI for what is almost always a wrong-file mistake.
-      setImportError(error instanceof Error ? error.message : 'That file could not be read.');
-    }
-  }, [clearSelection]);
+  const handleImportJson = useCallback(
+    async (file: File) => {
+      setImportError(null);
+      try {
+        const parsed = parsePlanFile(await file.text());
+        dispatch({ type: 'set', plan: parsed, commit: true });
+        clearSelection();
+      } catch (error) {
+        // parsePlanFile throws user-facing messages; never leak a stack trace
+        // into the UI for what is almost always a wrong-file mistake.
+        setImportError(error instanceof Error ? error.message : 'That file could not be read.');
+      }
+    },
+    [clearSelection],
+  );
 
   // -------------------------------------------------------------------------
   // Exports
@@ -778,6 +830,9 @@ export default function App() {
             onExportJson={handleExportJson}
             onExportSvg={handleExportSvg}
             onPrint={handlePrint}
+            onRepeatPlacement={handleRepeatPlacement}
+            canRepeat={lastPlaced !== null}
+            onOpenSchedule={() => setIsScheduleOpen(true)}
             onImportJson={handleImportJson}
             onOpenAR={() => setIsARViewerOpen(true)}
             onOpenEstimator={() => setIsEstimatorOpen(true)}
@@ -861,6 +916,7 @@ export default function App() {
               selectionCount={selection.ids.length}
               onUpdateElement={handleUpdateElement}
               onDeleteElement={handleDeleteElement}
+              onSplitWall={handleSplitWall}
               unit={unit}
               highContrast={highContrast}
               layerVisibility={layerVisibility}
@@ -951,6 +1007,10 @@ export default function App() {
 
       {/* Cost Estimator Overlay */}
       {isEstimatorOpen && <CostEstimatorPanel plan={plan} onClose={() => setIsEstimatorOpen(false)} />}
+
+      {isScheduleOpen && (
+        <RoomSchedulePanel plan={plan} unit={unit} onClose={() => setIsScheduleOpen(false)} />
+      )}
 
       {/* AI Architect Chat */}
       {isChatOpen ? (

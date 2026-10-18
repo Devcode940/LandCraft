@@ -19,20 +19,17 @@ import {
   MeasurementTape,
 } from '../types';
 import {
-  getSmartSnap,
-  snapOpeningToWalls,
+  endpointAtLength,
   formatDimension,
   formatWallDimensions,
   getDistance,
+  getSmartSnap,
+  parseWallLength,
+  snapOpeningToWalls,
 } from '../utils/geoUtils';
 import { suggestRoomName } from '../utils/roomAutoLabeler';
 import { MIN_ZOOM, MAX_ZOOM } from '../constants';
-import {
-  deleteElement,
-  moveElements,
-  moveRoomWithContents,
-  type ElementType,
-} from '../lib/planOps';
+import { deleteElement, makeId, moveElements, moveRoomWithContents, type ElementType } from '../lib/planOps';
 import { isSelected, toggleId, type EditorSelection } from '../lib/selection';
 
 interface FloorPlanCanvasProps {
@@ -252,9 +249,7 @@ export default function FloorPlanCanvas({
             dx = snapped.x - drag.offset.x - primaryOriginal.x;
             dy = snapped.y - drag.offset.y - primaryOriginal.y;
           }
-          s.setPlan((prev) =>
-            moveElements(prev, drag.elementType as ElementType, drag.elementIds, dx, dy),
-          );
+          s.setPlan((prev) => moveElements(prev, drag.elementType as ElementType, drag.elementIds, dx, dy));
         }
         return;
       }
@@ -400,6 +395,42 @@ export default function FloorPlanCanvas({
   };
 
   // -------------------------------------------------------------------------
+  // Wall drafting
+  // -------------------------------------------------------------------------
+
+  /** Shared by the click-to-place path and the numeric length input. */
+  const commitWall = useCallback(
+    (endPoint: Point) => {
+      if (!wallStartPoint) return;
+      const newWall: Wall = {
+        id: makeId('wall'),
+        x1: wallStartPoint.x,
+        y1: wallStartPoint.y,
+        x2: endPoint.x,
+        y2: endPoint.y,
+        thickness: 10,
+      };
+      setPlan((prev) => ({ ...prev, walls: [...prev.walls, newWall] }));
+      onStateChange();
+      // Chain the start of the next wall.
+      setWallStartPoint(endPoint);
+    },
+    [wallStartPoint, setPlan, onStateChange],
+  );
+
+  const [wallLengthDraft, setWallLengthDraft] = useState('');
+
+  const submitWallLength = useCallback(() => {
+    if (!wallStartPoint) return;
+    const lengthPx = parseWallLength(wallLengthDraft, unit);
+    if (lengthPx === null) return;
+    // The typed length is the specification: the wall runs
+    // towards the cursor but is exactly this long.
+    commitWall(endpointAtLength(wallStartPoint, currentMousePoint, lengthPx));
+    setWallLengthDraft('');
+  }, [wallStartPoint, wallLengthDraft, unit, currentMousePoint, commitWall]);
+
+  // -------------------------------------------------------------------------
   // Mouse down on the SVG stage
   // -------------------------------------------------------------------------
 
@@ -432,18 +463,7 @@ export default function FloorPlanCanvas({
         setWallStartPoint(snapped);
         setCurrentMousePoint(snapped);
       } else if (wallStartPoint && (snapped.x !== wallStartPoint.x || snapped.y !== wallStartPoint.y)) {
-        const newWall: Wall = {
-          id: `wall-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-          x1: wallStartPoint.x,
-          y1: wallStartPoint.y,
-          x2: snapped.x,
-          y2: snapped.y,
-          thickness: 10,
-        };
-        setPlan((prev) => ({ ...prev, walls: [...prev.walls, newWall] }));
-        onStateChange();
-        // Chain start of next wall
-        setWallStartPoint(snapped);
+        commitWall(snapped);
       }
       return;
     }
@@ -563,15 +583,11 @@ export default function FloorPlanCanvas({
     // What this drag moves: the whole selection when the grabbed
     // element belongs to it, otherwise just the grabbed element.
     const nextSelection = additive ? toggleId(selection, type, id) : selection;
-    const dragIds =
-      nextSelection.type === type && nextSelection.ids.includes(id)
-        ? nextSelection.ids
-        : [id];
+    const dragIds = nextSelection.type === type && nextSelection.ids.includes(id) ? nextSelection.ids : [id];
 
     const coords = getCanvasCoords(e.clientX, e.clientY);
     const originals = new Map<string, Point>();
-    const record = (elId: string, x: number, y: number) =>
-      originals.set(elId, { x, y });
+    const record = (elId: string, x: number, y: number) => originals.set(elId, { x, y });
 
     if (type === 'room') {
       const rm = plan.rooms.find((r) => r.id === id);
@@ -666,6 +682,39 @@ export default function FloorPlanCanvas({
       className={`flex-1 relative overflow-hidden select-none outline-none ${canvasBackground}`}
       onContextMenu={(e) => e.preventDefault()}
     >
+      {/* Numeric wall length: while a wall draft is active,
+          typing an exact dimension and pressing Enter places
+          the far endpoint that far from the start, towards
+          the cursor. */}
+      {activeTool === 'wall' && isDrawingWall && wallStartPoint && (
+        <form
+          className="absolute top-2 left-2 z-20 flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/95 px-2 py-1.5 shadow-lg"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submitWallLength();
+          }}
+        >
+          <label htmlFor="wall-length-input" className="text-[10px] uppercase tracking-wide text-slate-400">
+            Length ({unit === 'm' ? 'm' : 'ft'})
+          </label>
+          <input
+            id="wall-length-input"
+            value={wallLengthDraft}
+            onChange={(e) => setWallLengthDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setIsDrawingWall(false);
+                setWallLengthDraft('');
+              }
+            }}
+            placeholder="e.g. 2.5"
+            inputMode="decimal"
+            autoFocus
+            className="w-20 rounded border border-slate-600 bg-slate-950 px-1.5 py-0.5 text-xs text-slate-100 focus:border-emerald-500 focus:outline-none"
+          />
+        </form>
+      )}
+
       {/* 1. Measurement guide/instructions overlay */}
       <div className="absolute top-3 left-3 bg-white/90 dark:bg-slate-900/90 backdrop-blur-xs p-2 rounded border border-slate-200 dark:border-slate-800 text-[10px] space-y-0.5 pointer-events-none z-10 font-medium">
         <div className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
@@ -678,7 +727,8 @@ export default function FloorPlanCanvas({
           </span>
         </div>
         <p className="text-slate-400">
-          {activeTool === 'wall' && 'Click to start drawing a wall. Double click or Esc to finish.'}
+          {activeTool === 'wall' &&
+            'Click to start a wall, click again to finish. While drafting, type an exact length and press Enter.'}
           {activeTool === 'select' && 'Drag furniture & doors to move. Drag red endpoints to stretch walls.'}
           {activeTool === 'measure' &&
             'Drag between two points to measure. Middle-drag still pans. Esc clears.'}

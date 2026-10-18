@@ -11,9 +11,7 @@ import type { FloorPlanData } from '../types';
 function plan(): FloorPlanData {
   return {
     walls: [{ id: 'w1', x1: 0, y1: 0, x2: 400, y2: 0, thickness: 12 }],
-    rooms: [
-      { id: 'r1', x: 0, y: 0, width: 400, height: 300, label: 'Kitchen', color: 'bg-red-100' },
-    ],
+    rooms: [{ id: 'r1', x: 0, y: 0, width: 400, height: 300, label: 'Kitchen', color: 'bg-red-100' }],
     openings: [
       { id: 'o1', type: 'door', subType: 'standard', x: 200, y: 0, width: 32, rotation: 0, wallId: 'w1' },
     ],
@@ -92,10 +90,7 @@ describe('moveElements (group drag)', () => {
   it('moves a group of furniture by the delta', () => {
     const p = {
       ...plan(),
-      furniture: [
-        ...plan().furniture,
-        { ...plan().furniture[0], id: 'f2', x: 300, y: 300 },
-      ],
+      furniture: [...plan().furniture, { ...plan().furniture[0], id: 'f2', x: 300, y: 300 }],
     };
     const next = moveElements(p, 'furniture', ['f1', 'f2'], 10, -5);
     expect(next.furniture[0]).toMatchObject({ x: 210, y: 145 });

@@ -68,6 +68,36 @@ export function formatWallDimensions(
 /**
  * Calculate distance between two points
  */
+/**
+ * The point `lengthPx` away from `start` in the direction of
+ * `towards`. Used by the numeric wall-length input: the user
+ * types an exact dimension while drafting, and the wall runs
+ * towards wherever the cursor currently points (horizontal by
+ * default, before the cursor has moved).
+ */
+export function endpointAtLength(start: Point, towards: Point, lengthPx: number): Point {
+  const dx = towards.x - start.x;
+  const dy = towards.y - start.y;
+  const magnitude = Math.hypot(dx, dy);
+  if (magnitude < 1e-6) return { x: start.x + lengthPx, y: start.y };
+  return {
+    x: start.x + (dx / magnitude) * lengthPx,
+    y: start.y + (dy / magnitude) * lengthPx,
+  };
+}
+
+/**
+ * Parse a typed wall length in the active unit into
+ * canvas pixels. Returns null for anything that is not
+ * a positive finite number -- the input stays up so the
+ * user can fix it, rather than silently drawing nothing.
+ */
+export function parseWallLength(input: string, unit: DimensionUnit): number | null {
+  const n = Number(input.trim());
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return unit === 'm' ? n * PIXELS_PER_METER : n * PIXELS_PER_FOOT;
+}
+
 export function getDistance(p1: Point, p2: Point): number {
   return Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
 }

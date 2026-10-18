@@ -11,6 +11,8 @@ import {
   Grid,
   Download,
   Printer,
+  Repeat,
+  CalendarRange,
   Upload,
   FileCode,
   Eye as HighContrastIcon,
@@ -50,6 +52,9 @@ interface ToolbarProps {
   onExportJson: () => void;
   onExportSvg: () => void;
   onPrint: () => void;
+  onRepeatPlacement: () => void;
+  canRepeat: boolean;
+  onOpenSchedule: () => void;
   onImportJson?: (file: File) => void;
   onOpenAR: () => void;
   onOpenEstimator: () => void;
@@ -126,6 +131,9 @@ export default function Toolbar({
   onExportJson,
   onExportSvg,
   onPrint,
+  onRepeatPlacement,
+  canRepeat,
+  onOpenSchedule,
   onImportJson,
   onOpenAR,
   onOpenEstimator,
@@ -383,6 +391,27 @@ export default function Toolbar({
             </button>
           </>
         )}
+
+        <button
+          id="repeat-placement-btn"
+          onClick={onRepeatPlacement}
+          disabled={!canRepeat}
+          className={buttonClass('idle', highContrast)}
+          title="Place the last palette item again (P)"
+        >
+          <Repeat className="w-4 h-4" />
+          <span className="hidden sm:inline">Repeat</span>
+        </button>
+
+        <button
+          id="room-schedule-btn"
+          onClick={onOpenSchedule}
+          className={accentButtonClass(highContrast, 'emerald')}
+          title="Room area schedule with CSV export"
+        >
+          <CalendarRange className="w-4 h-4 text-emerald-500" />
+          <span className="hidden sm:inline">Schedule</span>
+        </button>
 
         <button
           id="export-svg-btn"

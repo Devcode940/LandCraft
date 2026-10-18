@@ -217,6 +217,86 @@ export function moveRoomWithContents(
   return { ...plan, rooms, furniture, openings };
 }
 
+/**
+ * Split a wall at `ratio` along its length, leaving a gap that
+ * holds a new opening -- the structured way to put a door in a
+ * wall, instead of freehand-drawing two segments and hoping
+ * they line up.
+ *
+ * The opening is left unattached (no wallId): the source wall
+ * no longer exists, and both replacement segments end at the
+ * gap, so pinning to either would misplace the swing.
+ *
+ * Returns the SAME plan when the wall is missing or too short
+ * to hold the gap.
+ */
+export function splitWallWithOpening(
+  plan: FloorPlanData,
+  wallId: string,
+  options: {
+    ratio: number;
+    gapWidth: number;
+    openingType: Opening['type'];
+    openingSubType: Opening['subType'];
+    openingWidth: number;
+  },
+): FloorPlanData {
+  const wall = plan.walls.find((w) => w.id === wallId);
+  if (!wall) return plan;
+
+  const dx = wall.x2 - wall.x1;
+  const dy = wall.y2 - wall.y1;
+  const length = Math.hypot(dx, dy);
+  const gap = Math.min(options.gapWidth, length / 2);
+  if (gap < 1) return plan;
+
+  // Keep the gap inside the wall; a split at the boundary
+  // yields a zero-length segment, which the segment checks
+  // below drop.
+  const minRatio = gap / 2 / length;
+  const maxRatio = 1 - minRatio;
+  if (minRatio > maxRatio) return plan;
+  const ratio = Math.min(maxRatio, Math.max(minRatio, options.ratio));
+
+  const ux = dx / length;
+  const uy = dy / length;
+  const splitX = wall.x1 + ux * length * ratio;
+  const splitY = wall.y1 + uy * length * ratio;
+  const halfGap = gap / 2;
+
+  const walls = plan.walls.filter((w) => w.id !== wallId);
+  const firstEndX = splitX - ux * halfGap;
+  const firstEndY = splitY - uy * halfGap;
+  const secondStartX = splitX + ux * halfGap;
+  const secondStartY = splitY + uy * halfGap;
+
+  // A segment shorter than a pixel is dropped, so splitting
+  // near an endpoint yields one wall plus an opening, not a
+  // zero-length sliver.
+  if (Math.hypot(firstEndX - wall.x1, firstEndY - wall.y1) >= 1) {
+    walls.push({ ...wall, id: makeId('wall'), x2: firstEndX, y2: firstEndY });
+  }
+  if (Math.hypot(wall.x2 - secondStartX, wall.y2 - secondStartY) >= 1) {
+    walls.push({ ...wall, id: makeId('wall'), x1: secondStartX, y1: secondStartY });
+  }
+
+  // Openings pinned to the removed wall would dangle.
+  const openings = [
+    ...plan.openings.map((o) => (o.wallId === wallId ? { ...o, wallId: undefined } : o)),
+    {
+      id: makeId('open'),
+      type: options.openingType,
+      subType: options.openingSubType,
+      x: splitX,
+      y: splitY,
+      width: Math.min(options.openingWidth, gap),
+      rotation: (Math.atan2(dy, dx) * 180) / Math.PI,
+    },
+  ];
+
+  return { ...plan, walls, openings };
+}
+
 /** All ids currently in use, for duplicate detection after an import/merge. */
 export function allIds(plan: FloorPlanData): Set<string> {
   const ids = new Set<string>();
@@ -275,9 +355,7 @@ export function moveElements(
       if (!plan.furniture.some((f) => idSet.has(f.id))) return plan;
       return {
         ...plan,
-        furniture: plan.furniture.map((f) =>
-          idSet.has(f.id) ? { ...f, x: f.x + dx, y: f.y + dy } : f,
-        ),
+        furniture: plan.furniture.map((f) => (idSet.has(f.id) ? { ...f, x: f.x + dx, y: f.y + dy } : f)),
       };
     }
     case 'wall': {
@@ -285,9 +363,7 @@ export function moveElements(
       return {
         ...plan,
         walls: plan.walls.map((w) =>
-          idSet.has(w.id)
-            ? { ...w, x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy }
-            : w,
+          idSet.has(w.id) ? { ...w, x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy } : w,
         ),
       };
     }
@@ -295,9 +371,7 @@ export function moveElements(
       if (!plan.openings.some((o) => idSet.has(o.id))) return plan;
       return {
         ...plan,
-        openings: plan.openings.map((o) =>
-          idSet.has(o.id) ? { ...o, x: o.x + dx, y: o.y + dy } : o,
-        ),
+        openings: plan.openings.map((o) => (idSet.has(o.id) ? { ...o, x: o.x + dx, y: o.y + dy } : o)),
       };
     }
     default:

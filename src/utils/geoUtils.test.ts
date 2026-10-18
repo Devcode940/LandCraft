@@ -8,6 +8,7 @@ import {
   boxIntersectsDoorSwing,
   checkBoundingBoxCollision,
   checkOverlapWarnings,
+  endpointAtLength,
   formatDimension,
   formatWallDimensions,
   furnitureRect,
@@ -15,6 +16,7 @@ import {
   getDistance,
   getWallBounds,
   isPointInDoorSwing,
+  parseWallLength,
   pixelsToFeetInches,
   snapToGrid,
 } from './geoUtils';
@@ -233,5 +235,45 @@ describe('checkOverlapWarnings', () => {
 
   it('does not flag a clear plan', () => {
     expect(checkOverlapWarnings([], [], [])).toHaveLength(0);
+  });
+});
+
+describe('endpointAtLength', () => {
+  it('places the endpoint at the typed distance along the cursor direction', () => {
+    const end = endpointAtLength({ x: 0, y: 0 }, { x: 100, y: 0 }, 250);
+    expect(end).toEqual({ x: 250, y: 0 });
+  });
+
+  it('normalises the direction, so a short drag still gives an exact length', () => {
+    const end = endpointAtLength({ x: 10, y: 10 }, { x: 11, y: 10 }, 400);
+    expect(end).toEqual({ x: 410, y: 10 });
+  });
+
+  it('follows diagonal directions', () => {
+    const end = endpointAtLength({ x: 0, y: 0 }, { x: 100, y: 100 }, Math.SQRT2 * 100);
+    expect(end.x).toBeCloseTo(100);
+    expect(end.y).toBeCloseTo(100);
+  });
+
+  it('defaults to horizontal before the cursor moves', () => {
+    const end = endpointAtLength({ x: 50, y: 50 }, { x: 50, y: 50 }, 120);
+    expect(end).toEqual({ x: 170, y: 50 });
+  });
+});
+
+describe('parseWallLength', () => {
+  it('converts meters to canvas pixels', () => {
+    expect(parseWallLength('2.5', 'm')).toBe(100);
+  });
+
+  it('converts feet to canvas pixels', () => {
+    expect(parseWallLength('10', 'ft')).toBeCloseTo(10 * 12.192);
+  });
+
+  it('rejects non-numbers and non-positive values', () => {
+    expect(parseWallLength('abc', 'm')).toBeNull();
+    expect(parseWallLength('', 'm')).toBeNull();
+    expect(parseWallLength('-3', 'm')).toBeNull();
+    expect(parseWallLength('0', 'm')).toBeNull();
   });
 });

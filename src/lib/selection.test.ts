@@ -17,11 +17,7 @@ describe('selection model', () => {
   });
 
   it('toggles an element off', () => {
-    const sel = toggleId(
-      toggleId(selectSingle('furniture', 'f1'), 'furniture', 'f2'),
-      'furniture',
-      'f1',
-    );
+    const sel = toggleId(toggleId(selectSingle('furniture', 'f1'), 'furniture', 'f2'), 'furniture', 'f1');
     expect(sel.ids).toEqual(['f2']);
   });
 

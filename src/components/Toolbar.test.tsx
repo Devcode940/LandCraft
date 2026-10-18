@@ -28,6 +28,9 @@ function renderToolbar() {
       onExportJson={noop}
       onExportSvg={noop}
       onPrint={noop}
+      onRepeatPlacement={noop}
+      canRepeat
+      onOpenSchedule={noop}
       onOpenAR={noop}
       onOpenEstimator={noop}
       zoom={1}
@@ -43,5 +46,11 @@ describe('Toolbar', () => {
     expect(screen.getByRole('button', { name: /export svg/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /export json/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /print \/ pdf/i })).toBeInTheDocument();
+  });
+
+  it('offers repeat placement and the room schedule', () => {
+    renderToolbar();
+    expect(screen.getByRole('button', { name: /repeat/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /schedule/i })).toBeInTheDocument();
   });
 });
