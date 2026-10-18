@@ -13,6 +13,7 @@
 
 import type { FloorPlanData } from '../types';
 import { normalizePlan } from '../utils/normalizePlan';
+import { applyEdits } from './planEdits';
 
 /** Maximum undo steps retained. Bounds memory regardless of session length. */
 export const HISTORY_LIMIT = 100;
@@ -29,6 +30,7 @@ export type EditorAction =
   | { type: 'set'; plan: FloorPlanData | unknown; commit: boolean; normalize?: boolean }
   | { type: 'update'; updater: (prev: FloorPlanData) => FloorPlanData; commit: boolean }
   | { type: 'commit' }
+  | { type: 'apply-edits'; edits: unknown }
   | { type: 'undo' }
   | { type: 'redo' }
   | { type: 'reset'; plan: FloorPlanData | unknown };
@@ -56,6 +58,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const plan = action.updater(state.plan);
       if (plan === state.plan) return state;
       return action.commit ? pushHistory(state, plan) : { ...state, plan };
+    }
+
+    case 'apply-edits': {
+      // Structured edits from the architect chat. Applied to the
+      // reducer's own state, so an async chat response can never
+      // patch a stale plan, and committed as one undoable step.
+      const result = applyEdits(state.plan, action.edits);
+      if (result.applied === 0) return state;
+      return pushHistory(state, result.plan);
     }
 
     case 'commit':

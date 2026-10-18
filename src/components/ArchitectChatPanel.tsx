@@ -2,11 +2,12 @@ import { useState, useRef, useEffect } from 'react';
 import { X, Send, Bot, User, Minimize2, Loader2 } from 'lucide-react';
 import { FloorPlanData } from '../types';
 import { apiPost } from '../utils/apiClient';
+import type { EditResult } from '../lib/planEdits';
 import Markdown from 'react-markdown';
 
 interface ChatMessage {
   id: string;
-  role: 'user' | 'model';
+  role: 'user' | 'model' | 'system';
   content: string;
 }
 
@@ -15,15 +16,22 @@ interface ArchitectChatPanelProps {
   onClose: () => void;
   /** Receives raw model output; the parent normalizes before rendering. */
   onUpdatePlan: (newPlan: unknown) => void;
+  /** Applies structured edits to the canvas; returns what happened. */
+  onApplyEdits: (edits: unknown) => EditResult;
 }
 
-export default function ArchitectChatPanel({ plan, onClose, onUpdatePlan }: ArchitectChatPanelProps) {
+export default function ArchitectChatPanel({
+  plan,
+  onClose,
+  onUpdatePlan,
+  onApplyEdits,
+}: ArchitectChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome',
       role: 'model',
       content:
-        "Hello! I'm the LandCraft AI Architect. I can answer questions about your current layout, building codes, space planning, or even generate new floor plan modifications for you. How can I help?",
+        "Hello! I'm the LandCraft AI Architect. I can answer questions about your current layout, building codes, space planning, and I can edit your current plan directly -- try \u201cmake the kitchen 20% larger\u201d. How can I help?",
     },
   ]);
   const [input, setInput] = useState('');
@@ -36,6 +44,18 @@ export default function ArchitectChatPanel({ plan, onClose, onUpdatePlan }: Arch
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, isLoading]);
+
+  // Floating panel, not a modal: it must not trap focus, but
+  // Escape should still dismiss it (keyboard-only users have no
+  // other way to clear it without tabbing to the header buttons).
+  useEffect(() => {
+    if (isMinimized) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isMinimized, onClose]);
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
@@ -65,6 +85,7 @@ export default function ArchitectChatPanel({ plan, onClose, onUpdatePlan }: Arch
         success: boolean;
         text?: string;
         generatedPlan?: { plan?: unknown };
+        edits?: unknown;
         message?: string;
       }>('/api/architect-chat', { messages: chatHistory, plan });
 
@@ -80,8 +101,27 @@ export default function ArchitectChatPanel({ plan, onClose, onUpdatePlan }: Arch
 
       setMessages((prev) => [...prev, assistantMessage]);
 
+      // A full regeneration replaces the plan; structured edits
+      // patch it in place, so the change is undoable like a manual one.
       if (data.generatedPlan?.plan) {
         onUpdatePlan(data.generatedPlan.plan);
+      } else if (Array.isArray(data.edits) && data.edits.length > 0) {
+        const result = onApplyEdits(data.edits);
+        const lines: string[] = [];
+        if (result.applied > 0) {
+          lines.push(`Applied ${result.applied} change${result.applied === 1 ? '' : 's'} to the canvas:`);
+          result.summaries.forEach((summary) => lines.push(`- ${summary}`));
+          lines.push('Ctrl+Z undoes the whole change.');
+        }
+        result.skipped.forEach((skip) => {
+          lines.push(`Skipped edit ${skip.index + 1}: ${skip.reason}`);
+        });
+        if (lines.length > 0) {
+          setMessages((prev) => [
+            ...prev,
+            { id: (Date.now() + 2).toString(), role: 'system', content: lines.join('  ') },
+          ]);
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Something went wrong.';
@@ -143,30 +183,46 @@ export default function ArchitectChatPanel({ plan, onClose, onUpdatePlan }: Arch
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((msg) => (
-          <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+        {messages.map((msg) =>
+          msg.role === 'system' ? (
+            // Edit receipts: not a conversation turn, so no avatar and
+            // a quieter style than either speaker.
             <div
-              className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${msg.role === 'user' ? 'bg-emerald-600' : 'bg-blue-600'}`}
-            >
-              {msg.role === 'user' ? (
-                <User className="w-4 h-4 text-white" />
-              ) : (
-                <Bot className="w-4 h-4 text-white" />
-              )}
-            </div>
-            <div
-              className={`max-w-[80%] rounded-2xl p-3 text-sm ${
-                msg.role === 'user'
-                  ? 'bg-emerald-600 text-white rounded-tr-none'
-                  : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'
-              }`}
+              key={msg.id}
+              className="mx-auto max-w-[90%] rounded-xl border border-slate-700/60 bg-slate-800/40 px-3 py-2 text-xs text-slate-400"
             >
               <div className="prose prose-invert prose-sm max-w-none">
                 <Markdown>{msg.content}</Markdown>
               </div>
             </div>
-          </div>
-        ))}
+          ) : (
+            <div
+              key={msg.id}
+              className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
+            >
+              <div
+                className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${msg.role === 'user' ? 'bg-emerald-600' : 'bg-blue-600'}`}
+              >
+                {msg.role === 'user' ? (
+                  <User className="w-4 h-4 text-white" />
+                ) : (
+                  <Bot className="w-4 h-4 text-white" />
+                )}
+              </div>
+              <div
+                className={`max-w-[80%] rounded-2xl p-3 text-sm ${
+                  msg.role === 'user'
+                    ? 'bg-emerald-600 text-white rounded-tr-none'
+                    : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700'
+                }`}
+              >
+                <div className="prose prose-invert prose-sm max-w-none">
+                  <Markdown>{msg.content}</Markdown>
+                </div>
+              </div>
+            </div>
+          ),
+        )}
         {isLoading && (
           <div className="flex gap-3">
             <div className="shrink-0 w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">

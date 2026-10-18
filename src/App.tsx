@@ -28,6 +28,7 @@ import {
   updateElement,
   type ElementType,
 } from './lib/planOps';
+import { applyEdits, type EditResult } from './lib/planEdits';
 import { clearStoredPlan, loadPlanLocally, parsePlanFile, savePlanLocally } from './lib/persistence';
 import { downloadBlob } from './lib/download';
 
@@ -174,6 +175,22 @@ export default function App() {
     setSelectedElementId(null);
     setSelectedElementType(null);
   }, []);
+
+  /**
+   * Apply structured edits from the architect chat. The reducer
+   * applies them to its own state -- so an async chat response can
+   * never patch a stale plan -- as one undoable history entry.
+   * The dry run here is for the chat transcript only; it uses the
+   * same pure function the reducer just ran.
+   */
+  const handleApplyEdits = useCallback(
+    (edits: unknown): EditResult => {
+      const preview = applyEdits(plan, edits);
+      dispatch({ type: 'apply-edits', edits });
+      return preview;
+    },
+    [plan],
+  );
 
   const handleUndo = useCallback(() => dispatch({ type: 'undo' }), []);
   const handleRedo = useCallback(() => dispatch({ type: 'redo' }), []);
@@ -458,13 +475,6 @@ export default function App() {
   const saveTimer = useRef<number | null>(null);
 
   // Mirrored into a ref so the beforeunload handler (registered once) always
-  // sees the newest plan. Updated in an effect because writing a ref during
-  // render is not safe under concurrent rendering.
-  const planRef = useRef(plan);
-  useEffect(() => {
-    planRef.current = plan;
-  }, [plan]);
-
   useEffect(() => {
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
@@ -477,14 +487,16 @@ export default function App() {
     };
   }, [plan]);
 
+  // Re-binds on every plan change so the handler always sees the
+  // latest state without a ref.
   useEffect(() => {
-    const flush = () => savePlanLocally(planRef.current);
+    const flush = () => savePlanLocally(plan);
     window.addEventListener('beforeunload', flush);
     return () => {
       window.removeEventListener('beforeunload', flush);
       flush();
     };
-  }, []);
+  }, [plan]);
 
   const [importError, setImportError] = useState<string | null>(null);
 
@@ -806,7 +818,12 @@ export default function App() {
 
       {/* AI Architect Chat */}
       {isChatOpen ? (
-        <ArchitectChatPanel plan={plan} onClose={() => setIsChatOpen(false)} onUpdatePlan={loadPlan} />
+        <ArchitectChatPanel
+          plan={plan}
+          onClose={() => setIsChatOpen(false)}
+          onUpdatePlan={loadPlan}
+          onApplyEdits={handleApplyEdits}
+        />
       ) : (
         <div className="fixed bottom-6 right-6 z-[90]">
           <button

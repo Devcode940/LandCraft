@@ -390,6 +390,47 @@ const FLOOR_PLAN_RESPONSE_SCHEMA = {
   required: ['name', 'rationale', 'dimensions', 'plan'],
 };
 
+/**
+ * Whitelisted, atomic plan modifications for the architect chat.
+ * The client re-validates every edit against this same shape before
+ * touching plan state, so a hallucinated field here is skipped, not
+ * applied. Keep this in sync with PlanEdit in src/lib/planEdits.ts.
+ */
+const EDIT_PLAN_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    edits: {
+      type: Type.ARRAY,
+      description:
+        'Ordered list of edits to apply to the current plan. Prefer the smallest change that satisfies the request.',
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          kind: { type: Type.STRING },
+          roomId: { type: Type.STRING },
+          furnitureId: { type: Type.STRING },
+          elementType: { type: Type.STRING },
+          id: { type: Type.STRING },
+          x: { type: Type.NUMBER },
+          y: { type: Type.NUMBER },
+          x1: { type: Type.NUMBER },
+          y1: { type: Type.NUMBER },
+          x2: { type: Type.NUMBER },
+          y2: { type: Type.NUMBER },
+          width: { type: Type.NUMBER },
+          height: { type: Type.NUMBER },
+          thickness: { type: Type.NUMBER },
+          rotation: { type: Type.NUMBER },
+          subType: { type: Type.STRING },
+          label: { type: Type.STRING },
+          category: { type: Type.STRING },
+        },
+      },
+    },
+  },
+  required: ['edits'],
+};
+
 const AUDIT_RESPONSE_SCHEMA = {
   type: Type.OBJECT,
   properties: {
@@ -847,7 +888,8 @@ app.post('/api/architect-chat', async (req, res) => {
     const systemPrompt = `
       You are an expert architect AI assistant for LandCraft AI.
       You answer user questions about architecture, space planning, building codes, and floor plan design.
-      If the user asks you to generate, modify, or create a floor plan based on their requirements, use the \`generate_floor_plan\` function.
+      When the user asks to MODIFY the current plan (resize, move, rename, add or remove something), use the \`edit_floor_plan\` function with the smallest set of edits that satisfies the request. Reference element ids from the Current Floor Plan Context exactly as given.
+      Only use \`generate_floor_plan\` when the user asks for a wholly new or different layout, or when no usable plan exists yet.
 
       Current Floor Plan Context (if any):
       ${JSON.stringify(plan)}
@@ -870,6 +912,12 @@ app.post('/api/architect-chat', async (req, res) => {
           {
             functionDeclarations: [
               {
+                name: 'edit_floor_plan',
+                description:
+                  'Applies a small, structured change to the current floor plan (resize/move/rename a room, add/move furniture, add a wall, delete an element). Prefer this over regenerating the whole plan.',
+                parameters: EDIT_PLAN_SCHEMA,
+              },
+              {
                 name: 'generate_floor_plan',
                 description:
                   "Generates a new floor plan based on the user's request. Call this when the user explicitly asks to generate, create, or update the floor plan.",
@@ -883,22 +931,34 @@ app.post('/api/architect-chat', async (req, res) => {
     });
 
     let generatedPlan: unknown = null;
+    let edits: unknown = null;
     let responseText = result.text || '';
 
+    // The model may call either tool. `generate_floor_plan` replaces the
+    // whole plan; `edit_floor_plan` patches it. The client re-validates
+    // both before anything reaches canvas state.
     const functionCalls = result.functionCalls;
     if (functionCalls && functionCalls.length > 0) {
-      const call = functionCalls[0];
-      if (call.name === 'generate_floor_plan' && call.args) {
-        const args = call.args as Record<string, unknown>;
-        // Normalize so the client can load this straight onto the canvas.
-        generatedPlan = { ...args, plan: normalizePlan(args.plan) };
-        if (!responseText) {
-          responseText = "I've generated a new floor plan based on your request. Check it out!";
+      for (const call of functionCalls) {
+        if (call.name === 'generate_floor_plan' && call.args) {
+          const args = call.args as Record<string, unknown>;
+          // Normalize so the client can load this straight onto the canvas.
+          generatedPlan = { ...args, plan: normalizePlan(args.plan) };
+        } else if (call.name === 'edit_floor_plan' && call.args) {
+          const args = call.args as Record<string, unknown>;
+          if (Array.isArray(args.edits)) edits = args.edits;
         }
+      }
+      if (!responseText) {
+        responseText = generatedPlan
+          ? "I've generated a new floor plan based on your request. Check it out!"
+          : edits
+            ? "I've applied the changes to your plan."
+            : '';
       }
     }
 
-    res.json({ success: true, text: responseText, generatedPlan });
+    res.json({ success: true, text: responseText, generatedPlan, edits });
   } catch (error) {
     console.error('Chat error:', error);
     res.status(500).json({

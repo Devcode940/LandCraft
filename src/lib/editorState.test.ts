@@ -217,6 +217,44 @@ describe('planOps', () => {
     expect(moveRoomWithContents(p, 'nope', 10, 10)).toBe(p);
   });
 
+  it('apply-edits patches the plan as one undoable step', () => {
+    const state = initEditorState(planWith(1));
+    const next = editorReducer(state, {
+      type: 'apply-edits',
+      edits: [{ kind: 'resizeRoom', roomId: 'r0', width: 200, height: 150 }],
+    });
+    expect(next.plan.rooms[0]).toMatchObject({ width: 200, height: 150 });
+    expect(next.index).toBe(1);
+    // And Ctrl+Z takes it back.
+    const undone = editorReducer(next, { type: 'undo' });
+    expect(undone.plan.rooms[0].width).toBe(100);
+  });
+
+  it('apply-edits against a stale copy still applies to the freshest plan', () => {
+    // The reducer applies to its own state, so an async chat
+    // response cannot clobber edits made after it was sent.
+    const state = initEditorState(planWith(1));
+    const intermediate = editorReducer(state, {
+      type: 'update',
+      commit: true,
+      updater: (prev) => updateElement(prev, 'room', 'r0', { label: 'Studio' }),
+    });
+    const next = editorReducer(intermediate, {
+      type: 'apply-edits',
+      edits: [{ kind: 'resizeRoom', roomId: 'r0', width: 200, height: 150 }],
+    });
+    expect(next.plan.rooms[0]).toMatchObject({ label: 'Studio', width: 200 });
+  });
+
+  it('apply-edits with nothing valid records no history entry', () => {
+    const state = initEditorState(planWith(1));
+    const next = editorReducer(state, {
+      type: 'apply-edits',
+      edits: [{ kind: 'resizeRoom', roomId: 'missing', width: 5, height: 5 }],
+    });
+    expect(next).toBe(state);
+  });
+
   it('addElement appends without mutating the previous arrays', () => {
     const base = planWith(1);
     const room = { id: 'r-new', x: 0, y: 0, width: 10, height: 10, label: 'New', color: 'rgba(0,0,0,0.1)' };
