@@ -32,6 +32,7 @@ function renderToolbar() {
       canRepeat
       onOpenSchedule={noop}
       onOpenAR={noop}
+      onOpen3D={noop}
       onOpenEstimator={noop}
       zoom={1}
       setZoom={noop}
@@ -52,5 +53,11 @@ describe('Toolbar', () => {
     renderToolbar();
     expect(screen.getByRole('button', { name: /repeat/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /schedule/i })).toBeInTheDocument();
+  });
+
+  it('offers both 3D views: orbit preview and AR', () => {
+    renderToolbar();
+    expect(screen.getByRole('button', { name: /3d view/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /view in ar/i })).toBeInTheDocument();
   });
 });

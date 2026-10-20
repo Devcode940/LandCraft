@@ -109,6 +109,22 @@ describe('moveElements (group drag)', () => {
     expect(next.walls[0]).toMatchObject({ x1: 5, y1: 5, x2: 405, y2: 5 });
   });
 
+  it('carries openings pinned to a moved wall', () => {
+    const next = moveElements(plan(), 'wall', ['w1'], 30, -10);
+    // The door is pinned to w1: it must travel with the wall,
+    // not float at its old coordinates.
+    expect(next.openings[0]).toMatchObject({ x: 230, y: -10, wallId: 'w1' });
+  });
+
+  it('leaves unpinned openings alone when walls move', () => {
+    const p = {
+      ...plan(),
+      openings: [{ ...plan().openings[0], wallId: undefined, wallOffset: undefined }],
+    };
+    const next = moveElements(p, 'wall', ['w1'], 30, -10);
+    expect(next.openings[0]).toMatchObject({ x: 200, y: 0 });
+  });
+
   it('ignores ids that no longer exist', () => {
     const p = plan();
     expect(moveElements(p, 'furniture', ['ghost'], 10, 10)).toBe(p);

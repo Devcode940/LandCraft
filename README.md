@@ -16,14 +16,22 @@ and without an API key. AI features are additive, never required.
 **Drafting**
 
 - Wall drawing with live snap-to-grid and snap-to-endpoint, with the length and
-  thickness on the segment as you draw.
+  thickness on the segment as you draw — or type an exact length while drafting.
 - Rooms, doors, windows and ~30 furniture presets, each with an inspector for
   exact dimensions.
 - Moving a room carries the furniture and openings inside it.
+- Multi-select (Shift/Ctrl/Cmd+click) with group drag, clipboard
+  (copy/cut/paste/duplicate), and repeat placement (`P`).
+- Split a wall and insert a door in one step; doors and windows stay pinned to
+  their wall when it is moved or reshaped.
+- Live collision strip: furniture-on-furniture, stacked rooms, blocked door
+  swings and furniture outside every room, reported as you draw.
 - Tape measure with snapping, live distance readout, and a clear-all control.
+- Room schedule with areas, totals and CSV export.
 - Undo/redo across 100 steps. A drag is one step, not one per frame.
 - Layer visibility, wall length × width labels, metric or imperial.
-- Export to JSON (lossless, re-importable) or SVG (vector, opens anywhere).
+- Export to JSON (lossless, re-importable), SVG, or print/PDF.
+- 3D orbit preview of the plan (Three.js), lazily loaded.
 
 **AI**
 
@@ -32,15 +40,19 @@ and without an API key. AI features are additive, never required.
 - Generate from a photo of the land.
 - Audit a plan for circulation, accessibility, daylight and safety, with an
   optimized plan offered alongside the findings.
-- Conversational architect with a `generate_floor_plan` tool call.
+- Conversational architect with `generate_floor_plan` and `edit_floor_plan`
+  tool calls — modifications apply as a small, validated, undoable patch
+  instead of regenerating the whole drawing.
 - Cost optimization suggestions grounded in the actual measured quantities.
 
 **Everywhere**
 
 - Autosave to `localStorage`, restored on reload.
-- Keyboard shortcuts: `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`, `Delete`, `Esc`, and
-  `V`/`W`/`R`/`D`/`N`/`F`/`M` for tools.
+- Keyboard shortcuts: `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`, `Ctrl+C/X/V/D`,
+  `Delete`, `Esc`, `P` (repeat), and `V`/`W`/`R`/`D`/`N`/`F`/`M` for tools.
 - High-contrast mode that is a real accessibility override, not a colour tweak.
+- The AI workbench docks to a floating launcher when minimized; the choice
+  persists across reloads.
 - AR viewer on WebXR-capable devices, loaded lazily so it costs nothing on the
   devices that cannot use it.
 
@@ -68,7 +80,7 @@ The app runs without a key. AI routes return `400 Missing API Key` and
 | `npm start` | Run the built server (`node dist/server.cjs`) |
 | `npm run typecheck` | `tsc --noEmit` under `strict` |
 | `npm run lint` | Typecheck + ESLint |
-| `npm test` | Vitest, 185 tests |
+| `npm test` | Vitest, 205 tests |
 | `npm run test:coverage` | Same, with V8 coverage over `src/lib` and `src/utils` |
 | `npm run format` | Prettier |
 | `npm run verify` | Typecheck + tests + build. Run this before pushing. |
@@ -84,14 +96,22 @@ src/
   lib/                    Pure, unit-tested logic. No React, no DOM.
     editorState.ts        Undo/redo reducer
     planOps.ts            Add / update / delete / move over FloorPlanData
+    planEdits.ts          Structured chat edits: validate + apply
+    plan3D.ts             Plan -> metre-space 3D geometry (pure)
+    selection.ts          Multi-select state
+    clipboardOps.ts       Copy / paste with id regeneration
+    schedule.ts           Room schedule + CSV
+    printBlueprint.ts     Print/PDF export of the live SVG
     persistence.ts        localStorage + file import
     download.ts           Blob download helper
-  hooks/                  React-only helpers
   utils/                  Geometry, normalisation, room labelling, samples
   components/
     Modal.tsx             Accessible dialog: focus trap, Escape, scroll lock
     ErrorBoundary.tsx     Root and per-panel crash containment
     FloorPlanCanvas.tsx   The SVG editor surface
+    Plan3DModel.tsx       Shared three.js scene graph (AR + 3D preview)
+    Plan3DViewer.tsx      Orbit-able 3D preview (lazy-loaded)
+    ARViewer.tsx          WebXR AR projection (lazy-loaded)
     ...                   Panels and inspector
   types.ts                Shared data shapes
 ```
@@ -169,13 +189,15 @@ exec-form `CMD`, so the signal arrives.
 npm test
 ```
 
-185 tests across seventeen files. The suite covers the parts where a mistake is
+205 tests across eighteen files. The suite covers the parts where a mistake is
 silently wrong rather than visibly broken:
 
 | File | Covers |
 | --- | --- |
 | `lib/editorState.test.ts` | history coalescing, undo/redo, the 100-step cap, immutability |
 | `lib/planOps.test.ts` (in the same file) | add/update/delete/move, dangling `wallId` cleanup |
+| `lib/planEdits.test.ts` | chat-edit validation, batching, the 100-edit cap |
+| `lib/plan3D.test.ts` | metre-space transforms for walls, openings, furniture |
 | `lib/persistence.test.ts` | storage round trip, corrupt data, hostile import files |
 | `utils/normalizePlan.test.ts` | garbage, hostile and missing model output |
 | `utils/geoUtils.test.ts` | geometry, door-swing collision, `5' 12"` formatting bugs |
@@ -183,13 +205,14 @@ silently wrong rather than visibly broken:
 | `components/ErrorBoundary.test.tsx` | fallbacks, panel variant, recovery |
 | `components/AutoLabelRoomsModal.test.tsx` | the panel still mounts and closes correctly inside `Modal` |
 | `components/ArchitectChatPanel.test.tsx` | chat applies structured edits, reports skips, still regenerates |
-| `components/Toolbar.test.tsx` | the three export paths are reachable |
+| `components/Toolbar.test.tsx` | export paths, 3D and AR entries are reachable |
+| `components/RoomSchedulePanel.test.tsx` | schedule table, totals, CSV export |
+| `components/AiAssistantPanel.test.tsx` | workbench minimize docks and reopens |
 | `lib/printBlueprint.test.ts` | printer attributes set and restored |
 | `lib/selection.test.ts` | multi-select toggle semantics |
 | `lib/clipboardOps.test.ts` | copy/paste id regeneration, offsets, group moves |
 | `lib/wallSplit.test.ts` | wall splitting, gap clamping, segment dropping |
 | `lib/schedule.test.ts` | room schedule math, CSV quoting |
-| `components/AiAssistantPanel.test.tsx` | workbench minimize docks and reopens |
 
 Not covered: canvas interaction (wall chains, snapping, drag bookkeeping), the
 AR viewer, and the AI panels themselves. Those need a browser, and the AI ones

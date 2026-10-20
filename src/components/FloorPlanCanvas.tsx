@@ -25,11 +25,19 @@ import {
   getDistance,
   getSmartSnap,
   parseWallLength,
+  pointAtWallOffset,
   snapOpeningToWalls,
 } from '../utils/geoUtils';
 import { suggestRoomName } from '../utils/roomAutoLabeler';
 import { MIN_ZOOM, MAX_ZOOM } from '../constants';
-import { deleteElement, makeId, moveElements, moveRoomWithContents, type ElementType } from '../lib/planOps';
+import {
+  deleteElement,
+  isPlanEmpty,
+  makeId,
+  moveElements,
+  moveRoomWithContents,
+  type ElementType,
+} from '../lib/planOps';
 import { isSelected, toggleId, type EditorSelection } from '../lib/selection';
 
 interface FloorPlanCanvasProps {
@@ -137,7 +145,23 @@ export default function FloorPlanCanvas({
    * JSON export, an AI round trip, or the undo history.
    */
   const [measurements, setMeasurements] = useState<MeasurementTape[]>([]);
-  const [measureDraft, setMeasureDraft] = useState<MeasurementTape | null>(null);
+  const [measureDraft, setMeasureDraftState] = useState<MeasurementTape | null>(null);
+  // Declared up here (not beside commitWall below) so the
+  // window-level Escape handler can clear it without reading
+  // a binding before its declaration.
+  const [wallLengthDraft, setWallLengthDraft] = useState('');
+  /**
+   * Mirror of `measureDraft` for the window-level mouseup handler, which
+   * is bound once and cannot see fresh state. Committing a tape must read
+   * the draft from here, not from inside a setState updater: updaters may
+   * run twice under StrictMode, and a side effect in one would append the
+   * same tape twice.
+   */
+  const measureDraftRef = useRef<MeasurementTape | null>(null);
+  const setMeasureDraft = useCallback((draft: MeasurementTape | null) => {
+    measureDraftRef.current = draft;
+    setMeasureDraftState(draft);
+  }, []);
 
   /**
    * Drag bookkeeping lives in a ref because the move/up listeners are attached
@@ -292,12 +316,24 @@ export default function FloorPlanCanvas({
             const wallId = drag.jointWallId;
             const jointType = drag.jointType;
             if (!wallId || !jointType) break;
-            next.walls = prev.walls.map((w) => {
+            const walls = prev.walls.map((w) => {
               if (w.id !== wallId) return w;
               return jointType === 'p1'
                 ? { ...w, x1: snapped.x, y1: snapped.y }
                 : { ...w, x2: snapped.x, y2: snapped.y };
             });
+            next.walls = walls;
+            // Openings pinned to a reshaped wall stay on the segment
+            // at their original ratio; otherwise stretching an endpoint
+            // leaves the door floating off the wall.
+            const reshaped = walls.find((w) => w.id === wallId);
+            if (reshaped) {
+              next.openings = prev.openings.map((op) => {
+                if (op.wallId !== wallId) return op;
+                const pos = pointAtWallOffset(reshaped, op.wallOffset ?? 0);
+                return { ...op, x: pos.x, y: pos.y, rotation: pos.rotation };
+              });
+            }
             break;
           }
 
@@ -324,17 +360,16 @@ export default function FloorPlanCanvas({
         latest.current.onStateChange();
       }
       if (drag.mode === 'measure') {
-        setMeasureDraft((draft) => {
-          // Discard accidental clicks: a tape shorter than a few pixels is a
-          // mis-click, not a measurement.
-          if (
-            draft &&
-            getDistance({ x: draft.x1, y: draft.y1 }, { x: draft.x2, y: draft.y2 }) >= MIN_MEASURE_PX
-          ) {
-            setMeasurements((prev) => [...prev, { ...draft, id: `m-${prev.length}-${Date.now()}` }]);
-          }
-          return null;
-        });
+        const draft = measureDraftRef.current;
+        // Discard accidental clicks: a tape shorter than a few pixels is a
+        // mis-click, not a measurement.
+        if (
+          draft &&
+          getDistance({ x: draft.x1, y: draft.y1 }, { x: draft.x2, y: draft.y2 }) >= MIN_MEASURE_PX
+        ) {
+          setMeasurements((prev) => [...prev, { ...draft, id: `m-${prev.length}-${Date.now()}` }]);
+        }
+        setMeasureDraft(null);
       }
       dragRef.current = { ...IDLE_DRAG };
     };
@@ -345,7 +380,7 @@ export default function FloorPlanCanvas({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [getCanvasCoords, setPanX, setPanY]);
+  }, [getCanvasCoords, setPanX, setPanY, setMeasureDraft]);
 
   // Esc key cancels active tool or placement
   useEffect(() => {
@@ -354,6 +389,9 @@ export default function FloorPlanCanvas({
         dragRef.current = { ...IDLE_DRAG };
         setIsDrawingWall(false);
         setWallStartPoint(null);
+        // A cancelled draft must not leak its typed length into
+        // the next wall the user draws.
+        setWallLengthDraft('');
         setSelectedPaletteItem(null);
         setMeasureDraft(null);
         setActiveTool('select');
@@ -361,7 +399,7 @@ export default function FloorPlanCanvas({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [setActiveTool, setSelectedPaletteItem]);
+  }, [setActiveTool, setSelectedPaletteItem, setMeasureDraft, setWallLengthDraft]);
 
   /**
    * Wheel zoom. React attaches `onWheel` passively, so `preventDefault()` in a
@@ -418,8 +456,6 @@ export default function FloorPlanCanvas({
     [wallStartPoint, setPlan, onStateChange],
   );
 
-  const [wallLengthDraft, setWallLengthDraft] = useState('');
-
   const submitWallLength = useCallback(() => {
     if (!wallStartPoint) return;
     const lengthPx = parseWallLength(wallLengthDraft, unit);
@@ -428,7 +464,7 @@ export default function FloorPlanCanvas({
     // towards the cursor but is exactly this long.
     commitWall(endpointAtLength(wallStartPoint, currentMousePoint, lengthPx));
     setWallLengthDraft('');
-  }, [wallStartPoint, wallLengthDraft, unit, currentMousePoint, commitWall]);
+  }, [wallStartPoint, wallLengthDraft, unit, currentMousePoint, commitWall, setWallLengthDraft]);
 
   // -------------------------------------------------------------------------
   // Mouse down on the SVG stage
@@ -713,6 +749,35 @@ export default function FloorPlanCanvas({
             className="w-20 rounded border border-slate-600 bg-slate-950 px-1.5 py-0.5 text-xs text-slate-100 focus:border-emerald-500 focus:outline-none"
           />
         </form>
+      )}
+
+      {/* Empty editor space. The board is deliberately uncluttered:
+          with nothing in the plan, a single calm hint explains the
+          three ways to start, instead of the user staring at a blank
+          grid wondering whether it is broken. Non-interactive
+          (pointer-events-none) so it never blocks drafting. */}
+      {isPlanEmpty(plan) && (
+        <div
+          id="canvas-empty-state"
+          className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none"
+        >
+          <div
+            className={`text-center px-8 py-6 rounded-2xl border border-dashed max-w-sm ${
+              highContrast
+                ? 'border-black text-black'
+                : 'border-slate-300 dark:border-slate-700 text-slate-500 dark:text-slate-400'
+            }`}
+          >
+            <p className="text-sm font-bold uppercase tracking-wide mb-1">
+              Clear editor space
+            </p>
+            <p className="text-xs leading-relaxed">
+              This board is empty. Draw walls with the <kbd>W</kbd> tool,
+              stamp rooms and furniture from the left palette, or load a
+              starter plan from the toolbar.
+            </p>
+          </div>
+        </div>
       )}
 
       {/* 1. Measurement guide/instructions overlay */}

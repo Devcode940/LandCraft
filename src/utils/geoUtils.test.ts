@@ -17,6 +17,7 @@ import {
   getWallBounds,
   isPointInDoorSwing,
   parseWallLength,
+  pointAtWallOffset,
   pixelsToFeetInches,
   snapToGrid,
 } from './geoUtils';
@@ -258,6 +259,29 @@ describe('endpointAtLength', () => {
   it('defaults to horizontal before the cursor moves', () => {
     const end = endpointAtLength({ x: 50, y: 50 }, { x: 50, y: 50 }, 120);
     expect(end).toEqual({ x: 170, y: 50 });
+  });
+});
+
+describe('pointAtWallOffset', () => {
+  const wall = { id: 'w', x1: 0, y1: 0, x2: 100, y2: 0, thickness: 10 };
+
+  it('interpolates along the wall and carries its rotation', () => {
+    expect(pointAtWallOffset(wall, 0.5)).toEqual({ x: 50, y: 0, rotation: 0 });
+    expect(pointAtWallOffset(wall, 0)).toEqual({ x: 0, y: 0, rotation: 0 });
+    expect(pointAtWallOffset(wall, 1)).toEqual({ x: 100, y: 0, rotation: 0 });
+  });
+
+  it('clamps offsets outside the segment', () => {
+    expect(pointAtWallOffset(wall, 2).x).toBe(100);
+    expect(pointAtWallOffset(wall, -1).x).toBe(0);
+  });
+
+  it('follows diagonal walls', () => {
+    const diag = { ...wall, x2: 100, y2: 100 };
+    const mid = pointAtWallOffset(diag, 0.25);
+    expect(mid.x).toBeCloseTo(25);
+    expect(mid.y).toBeCloseTo(25);
+    expect(mid.rotation).toBeCloseTo(45);
   });
 });
 

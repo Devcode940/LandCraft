@@ -21,6 +21,7 @@ import {
   Maximize2,
   FolderOpen,
   Box,
+  Boxes,
   Calculator,
   Ruler,
   Sparkles,
@@ -57,6 +58,7 @@ interface ToolbarProps {
   onOpenSchedule: () => void;
   onImportJson?: (file: File) => void;
   onOpenAR: () => void;
+  onOpen3D: () => void;
   onOpenEstimator: () => void;
   onOpenAutoLabeler?: () => void;
   isLeftSidebarOpen?: boolean;
@@ -136,6 +138,7 @@ export default function Toolbar({
   onOpenSchedule,
   onImportJson,
   onOpenAR,
+  onOpen3D,
   onOpenEstimator,
   onOpenAutoLabeler,
   isLeftSidebarOpen = true,
@@ -352,6 +355,16 @@ export default function Toolbar({
         >
           <Calculator className="w-4 h-4 text-emerald-500" />
           <span className="hidden sm:inline font-bold">Estimate</span>
+        </button>
+
+        <button
+          id="view-3d-btn"
+          onClick={onOpen3D}
+          className={accentButtonClass(highContrast, 'blue')}
+          title="Orbit a 3D model of the plan"
+        >
+          <Boxes className="w-4 h-4 text-blue-500" />
+          <span className="hidden sm:inline font-bold">3D View</span>
         </button>
 
         <button

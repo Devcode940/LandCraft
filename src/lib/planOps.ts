@@ -363,7 +363,15 @@ export function moveElements(
       return {
         ...plan,
         walls: plan.walls.map((w) =>
-          idSet.has(w.id) ? { ...w, x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy } : w,
+          idSet.has(w.id)
+            ? { ...w, x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy }
+            : w,
+        ),
+        // Doors and windows pinned to a moved wall travel with it:
+        // their x/y is what renders, so leaving them behind would
+        // detach them from the wall they belong to.
+        openings: plan.openings.map((o) =>
+          o.wallId !== undefined && idSet.has(o.wallId) ? { ...o, x: o.x + dx, y: o.y + dy } : o,
         ),
       };
     }

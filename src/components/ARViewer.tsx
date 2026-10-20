@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { createXRStore, XR, useXRHitTest, XRDomOverlay } from '@react-three/xr';
 import { ContactShadows, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { FloorPlanData } from '../types';
-import { PIXELS_PER_METER } from '../utils/geoUtils';
+import Plan3DModel from './Plan3DModel';
 import {
   X,
   RotateCcw,
@@ -31,28 +31,6 @@ import {
  * bundle (~1.5 MB) for a screen most sessions never open.
  */
 const store = createXRStore();
-
-const WALL_HEIGHT = 2.7;
-const DOOR_HEIGHT = 2.1;
-const DOOR_THICKNESS = 0.05;
-const WINDOW_SILL = 0.9;
-const WINDOW_HEIGHT = 1.2;
-
-/** Furniture heights in metres, by subtype. Everything used to render as 0.8m. */
-const FURNITURE_HEIGHTS: Record<string, number> = {
-  bed: 0.6,
-  sofa: 0.8,
-  table: 0.75,
-  chair: 0.9,
-  counter: 0.9,
-  fridge: 1.8,
-  toilet: 0.75,
-  tub: 0.55,
-  plant: 1.2,
-  'tv-stand': 0.5,
-  vanity: 0.85,
-};
-const DEFAULT_FURNITURE_HEIGHT = 0.8;
 
 /**
  * Subscribe to the XR session reactively.
@@ -94,156 +72,6 @@ function useXRSession(): XRSession | null {
   }, []);
 
   return session;
-}
-
-function Plan3DModel({ plan }: { plan: FloorPlanData }) {
-  // Derived, not state: the old version used useState + useEffect, which
-  // rendered one frame at the un-centred origin before correcting.
-  const centerOffset = useMemo(() => {
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    plan.walls.forEach((w) => {
-      minX = Math.min(minX, w.x1, w.x2);
-      maxX = Math.max(maxX, w.x1, w.x2);
-      minY = Math.min(minY, w.y1, w.y2);
-      maxY = Math.max(maxY, w.y1, w.y2);
-    });
-    if (minX === Infinity) return { x: 0, z: 0 };
-    return { x: (minX + maxX) / 2, z: (minY + maxY) / 2 };
-  }, [plan.walls]);
-
-  const materials = useMemo(
-    () => ({
-      wall: new THREE.MeshStandardMaterial({ color: '#f0f0f0', roughness: 0.9 }),
-      floor: new THREE.MeshStandardMaterial({ color: '#e0e0e0', roughness: 0.8 }),
-      furniture: new THREE.MeshStandardMaterial({ color: '#88aaff', roughness: 0.4 }),
-      door: new THREE.MeshStandardMaterial({ color: '#8b5a2b', roughness: 0.6 }),
-      window: new THREE.MeshStandardMaterial({
-        color: '#a5d8ff',
-        roughness: 0.1,
-        transparent: true,
-        opacity: 0.55,
-      }),
-    }),
-    [],
-  );
-
-  // Dispose on unmount: these were previously leaked on every close.
-  useEffect(
-    () => () => {
-      Object.values(materials).forEach((m) => m.dispose());
-    },
-    [materials],
-  );
-
-  return (
-    <group position={[-centerOffset.x / PIXELS_PER_METER, 0, -centerOffset.z / PIXELS_PER_METER]}>
-      {/* Floor Room areas */}
-      {plan.rooms.map((room) => (
-        <mesh
-          key={room.id}
-          position={[
-            (room.x + room.width / 2) / PIXELS_PER_METER,
-            0.01,
-            (room.y + room.height / 2) / PIXELS_PER_METER,
-          ]}
-          rotation={[-Math.PI / 2, 0, 0]}
-          receiveShadow
-        >
-          <planeGeometry args={[room.width / PIXELS_PER_METER, room.height / PIXELS_PER_METER]} />
-          <primitive object={materials.floor} attach="material" />
-        </mesh>
-      ))}
-
-      {/* Walls */}
-      {plan.walls.map((wall) => {
-        const dx = wall.x2 - wall.x1;
-        const dy = wall.y2 - wall.y1;
-        const length = Math.sqrt(dx * dx + dy * dy) / PIXELS_PER_METER;
-        const angle = Math.atan2(dy, dx);
-        const thickness = (wall.thickness || 10) / PIXELS_PER_METER;
-        const height = wall.height || WALL_HEIGHT;
-
-        return (
-          <mesh
-            key={wall.id}
-            position={[
-              (wall.x1 + wall.x2) / 2 / PIXELS_PER_METER,
-              height / 2,
-              (wall.y1 + wall.y2) / 2 / PIXELS_PER_METER,
-            ]}
-            rotation={[0, -angle, 0]}
-            castShadow
-            receiveShadow
-          >
-            <boxGeometry args={[length, height, thickness]} />
-            <primitive object={materials.wall} attach="material" />
-          </mesh>
-        );
-      })}
-
-      {/* Doors & windows.
-          These were previously not rendered at all (the `door` material was
-          created and never used), so the "AR site projection" showed a sealed
-          box with no way in and no daylight. */}
-      {plan.openings.map((op) => {
-        const theta = (op.rotation * Math.PI) / 180;
-        const cx = op.x / PIXELS_PER_METER;
-        const cz = op.y / PIXELS_PER_METER;
-        const width = op.width / PIXELS_PER_METER;
-
-        if (op.type === 'window') {
-          return (
-            <mesh
-              key={op.id}
-              position={[cx, WINDOW_SILL + WINDOW_HEIGHT / 2, cz]}
-              rotation={[0, -theta, 0]}
-              castShadow
-            >
-              <boxGeometry args={[width, WINDOW_HEIGHT, 0.08]} />
-              <primitive object={materials.window} attach="material" />
-            </mesh>
-          );
-        }
-
-        // Door leaf standing at the hinge, swung along the wall direction.
-        const dirX = Math.cos(theta);
-        const dirZ = Math.sin(theta);
-        return (
-          <mesh
-            key={op.id}
-            position={[cx + (dirX * width) / 2, DOOR_HEIGHT / 2, cz + (dirZ * width) / 2]}
-            rotation={[0, -theta, 0]}
-            castShadow
-          >
-            <boxGeometry args={[width, DOOR_HEIGHT, DOOR_THICKNESS]} />
-            <primitive object={materials.door} attach="material" />
-          </mesh>
-        );
-      })}
-
-      {/* Furniture */}
-      {plan.furniture.map((f) => {
-        const width = f.width / PIXELS_PER_METER;
-        const depth = f.height / PIXELS_PER_METER;
-        const height = FURNITURE_HEIGHTS[f.subType] ?? DEFAULT_FURNITURE_HEIGHT;
-
-        return (
-          <mesh
-            key={f.id}
-            position={[f.x / PIXELS_PER_METER, height / 2, f.y / PIXELS_PER_METER]}
-            rotation={[0, (-f.rotation * Math.PI) / 180, 0]}
-            castShadow
-          >
-            <boxGeometry args={[width, height, depth]} />
-            <primitive object={materials.furniture} attach="material" />
-          </mesh>
-        );
-      })}
-    </group>
-  );
 }
 
 function ARScene({

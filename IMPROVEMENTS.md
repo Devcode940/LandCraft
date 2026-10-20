@@ -179,6 +179,25 @@ rather than an accident.
 
 ## What shipped
 
+**Bug sweep, 3D preview, README (2026-10-20):**
+Fixed: doors/windows pinned to a wall now travel
+with it when the wall is group-dragged or an
+endpoint is reshaped (previously they floated at
+stale coordinates); the tape measure no longer
+commits twice under StrictMode (the commit was a
+side effect inside a state updater); Escape
+mid-wall-draft clears the typed length so it
+cannot leak into the next wall; palette instant-add
+centres on the real viewport instead of a
+hardcoded 800×500; chat edit batches over 100
+items report the truncation instead of silently
+dropping it; move summaries name furniture by
+label. Added: a Three.js 3D orbit preview (lazy
+chunk sharing `Plan3DModel` with the AR viewer;
+geometry math extracted to pure, tested
+`lib/plan3D.ts`), an empty-state card on a clear
+canvas, and a README refresh.
+
 **Drafting accelerators (2026-10-18):**
 Numeric wall length (type an exact dimension while
 drafting; the typed value is the spec, so it is not

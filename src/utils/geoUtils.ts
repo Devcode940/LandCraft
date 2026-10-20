@@ -87,6 +87,24 @@ export function endpointAtLength(start: Point, towards: Point, lengthPx: number)
 }
 
 /**
+ * Position and orientation of a point at `offset` (0..1) along a
+ * wall. Openings pinned to a wall derive their render position from
+ * this, so a wall that is moved or reshaped can keep its doors and
+ * windows attached instead of leaving them floating behind.
+ */
+export function pointAtWallOffset(
+  wall: Wall,
+  offset: number,
+): { x: number; y: number; rotation: number } {
+  const t = Math.min(1, Math.max(0, offset));
+  return {
+    x: wall.x1 + (wall.x2 - wall.x1) * t,
+    y: wall.y1 + (wall.y2 - wall.y1) * t,
+    rotation: (Math.atan2(wall.y2 - wall.y1, wall.x2 - wall.x1) * 180) / Math.PI,
+  };
+}
+
+/**
  * Parse a typed wall length in the active unit into
  * canvas pixels. Returns null for anything that is not
  * a positive finite number -- the input stays up so the

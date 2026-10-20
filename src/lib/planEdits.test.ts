@@ -194,7 +194,11 @@ describe('applyEdits', () => {
         y: 0,
       }));
       const next = applyEdits(plan(), edits);
-      expect(next.applied + next.skipped.length).toBeLessThanOrEqual(100);
+      // Only the capped prefix is considered...
+      expect(next.applied).toBe(100);
+      // ...and the overflow is reported, not silently dropped.
+      expect(next.skipped).toHaveLength(1);
+      expect(next.skipped[0].reason).toMatch(/cap/);
     });
   });
 
@@ -206,6 +210,22 @@ describe('applyEdits', () => {
       { kind: 'deleteElement', elementType: 'furniture', id: 'f1' },
     ]);
     expect(JSON.stringify(original)).toBe(snapshot);
+  });
+});
+
+describe('applyEdits caps', () => {
+  it('reports a batch longer than the cap instead of silently dropping it', () => {
+    const edits = Array.from({ length: 120 }, (_, i) => ({
+      kind: 'moveFurniture' as const,
+      furnitureId: `ghost-${i}`,
+      x: 10,
+      y: 10,
+    }));
+    const result = applyEdits(plan(), edits);
+    expect(result.applied).toBe(0);
+    // 100 individually skipped (unknown ids) + 1 truncation notice.
+    expect(result.skipped).toHaveLength(101);
+    expect(result.skipped[100].reason).toMatch(/cap/);
   });
 });
 
@@ -235,5 +255,12 @@ describe('describeEdit', () => {
 
   it('falls back to the id when the room is unknown', () => {
     expect(describeEdit({ kind: 'moveRoom', roomId: makeId('r'), x: 0, y: 0 }, 'm')).toMatch(/^moved /);
+  });
+
+  it('names moved furniture by its label, not its id', () => {
+    const p = plan();
+    expect(
+      describeEdit({ kind: 'moveFurniture', furnitureId: p.furniture[0].id, x: 0, y: 0 }, 'm', p),
+    ).toBe(`moved ${p.furniture[0].label}`);
   });
 });

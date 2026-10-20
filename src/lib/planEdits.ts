@@ -193,7 +193,8 @@ export function applyEdits(plan: FloorPlanData, edits: unknown, unit: DimensionU
   const skipped: SkippedEdit[] = [];
   const summaries: string[] = [];
 
-  for (let i = 0; i < Math.min(edits.length, MAX_EDITS); i++) {
+  const considered = Math.min(edits.length, MAX_EDITS);
+  for (let i = 0; i < considered; i++) {
     const outcome = validateEdit(edits[i]);
     if ('reason' in outcome) {
       skipped.push({ index: i, reason: outcome.reason });
@@ -266,9 +267,19 @@ export function applyEdits(plan: FloorPlanData, edits: unknown, unit: DimensionU
     applied++;
   }
 
-  // Preserve reference identity when nothing changed, so the editor
-  // reducer (which compares with ===) records no history entry.
-  return { plan: applied === 0 ? plan : current, applied, skipped, summaries };
+  // A batch longer than the cap is truncated, not silently swallowed:
+  // the receipt must say so, or the model appears to have dropped
+  // edits without explanation.
+  if (edits.length > considered) {
+    skipped.push({
+      index: considered,
+      reason: `${edits.length - considered} more edits exceed the ${MAX_EDITS}-edit cap and were not applied`,
+    });
+  }
+
+    // Preserve reference identity when nothing changed, so the editor
+    // reducer (which compares with ===) records no history entry.
+    return { plan: applied === 0 ? plan : current, applied, skipped, summaries };
 }
 
 /** Human-readable summary of one edit, for the chat transcript. */
@@ -286,8 +297,10 @@ export function describeEdit(edit: PlanEdit, unit: DimensionUnit, plan?: FloorPl
       return `renamed a room to “${edit.label}”`;
     case 'addFurniture':
       return `added ${edit.label}`;
-    case 'moveFurniture':
-      return `moved ${edit.furnitureId}`;
+      case 'moveFurniture': {
+        const furn = plan?.furniture.find((f) => f.id === edit.furnitureId);
+        return `moved ${furn?.label || edit.furnitureId}`;
+      }
     case 'deleteElement':
       return `deleted ${edit.elementType} ${edit.id}`;
     case 'addWall':

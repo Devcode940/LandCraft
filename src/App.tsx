@@ -56,6 +56,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 // three.js / R3F / drei / WebXR is ~1.5 MB and sits behind a button most users
 // never press. Keep it out of the initial bundle.
 const ARViewer = lazy(() => import('./components/ARViewer'));
+const Plan3DViewer = lazy(() => import('./components/Plan3DViewer'));
 
 /**
  * Boot state: restore the last session if there is one, otherwise the starter
@@ -124,6 +125,7 @@ export default function App() {
   }, []);
 
   const [isARViewerOpen, setIsARViewerOpen] = useState(false);
+  const [is3DViewerOpen, setIs3DViewerOpen] = useState(false);
   const [isEstimatorOpen, setIsEstimatorOpen] = useState(false);
   const [isScheduleOpen, setIsScheduleOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -385,8 +387,16 @@ export default function App() {
       extra?: { color?: string; category?: string },
     ) => {
       setLastPlaced({ type, subType, label, width, height, extra });
-      const centerX = Math.round((400 - panX) / zoom);
-      const centerY = Math.round((250 - panY) / zoom);
+      // Centre of the actual viewport, not a hardcoded 800x500
+      // assumption: on a large monitor the old constant dropped
+      // elements far from where the user is looking.
+      const rect = document
+        .querySelector<SVGSVGElement>('#interactive-blueprint-svg')
+        ?.getBoundingClientRect();
+      const viewW = rect ? rect.width : 800;
+      const viewH = rect ? rect.height : 500;
+      const centerX = Math.round((viewW / 2 - panX) / zoom);
+      const centerY = Math.round((viewH / 2 - panY) / zoom);
 
       updatePlanAndCommit((prev) => {
         // Generated inside the updater so React's StrictMode double-invoke
@@ -835,6 +845,7 @@ export default function App() {
             onOpenSchedule={() => setIsScheduleOpen(true)}
             onImportJson={handleImportJson}
             onOpenAR={() => setIsARViewerOpen(true)}
+            onOpen3D={() => setIs3DViewerOpen(true)}
             onOpenEstimator={() => setIsEstimatorOpen(true)}
             onOpenAutoLabeler={() => setIsAutoLabelModalOpen(true)}
             isLeftSidebarOpen={isLeftSidebarOpen}
@@ -959,6 +970,32 @@ export default function App() {
           onApplyLabels={handleApplyAutoLabels}
           onClose={() => setIsAutoLabelModalOpen(false)}
         />
+      )}
+
+      {/* 3D Preview Overlay -- lazily loaded */}
+      {is3DViewerOpen && (
+        <ErrorBoundary
+          fallback={
+            <div className="fixed inset-0 z-[100] bg-black/80 text-white flex items-center justify-center p-6 text-sm">
+              The 3D viewer could not start. Your 2D plan is unaffected — close this to continue.
+            </div>
+          }
+        >
+          <Suspense
+            fallback={
+              <div className="fixed inset-0 z-[100] bg-black text-white flex flex-col items-center justify-center gap-3">
+                <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+                <span className="text-xs text-slate-400">Loading 3D viewer…</span>
+              </div>
+            }
+          >
+            <Plan3DViewer
+              plan={plan}
+              highContrast={highContrast}
+              onClose={() => setIs3DViewerOpen(false)}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {/* AR Viewer Overlay -- lazily loaded */}
